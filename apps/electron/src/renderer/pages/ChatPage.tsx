@@ -27,9 +27,11 @@ import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '
 
 export interface ChatPageProps {
   sessionId: string
+  /** Inbox has explicit read/unread actions and must not auto-clear those marks. */
+  trackViewing?: boolean
 }
 
-const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
+const ChatPage = React.memo(function ChatPage({ sessionId, trackViewing = true }: ChatPageProps) {
   const { t } = useTranslation()
   // Diagnostic: mark when component runs
   React.useLayoutEffect(() => {
@@ -184,11 +186,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // 2. If processing → when it completes, main process will clear hasUnread
   // The main process handles all the logic; we just report viewing state.
   React.useEffect(() => {
-    if (session && isWindowFocused && isFocusedPanel !== false) {
+    if (trackViewing && session && isWindowFocused && isFocusedPanel !== false) {
       onSetActiveViewingSession(session.id)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.id, isWindowFocused, isFocusedPanel, onSetActiveViewingSession])
+  }, [session?.id, isWindowFocused, isFocusedPanel, onSetActiveViewingSession, trackViewing])
 
   // Get pending permission and credential for this session
   const pendingPermission = usePendingPermission(sessionId)
@@ -274,15 +276,14 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     }
   }, [sessionId, activeWorkspaceId])
 
-  // Session connection change handler - can only change before first message
-  const handleConnectionChange = React.useCallback(async (connectionSlug: string) => {
+  const handleConnectionChange = React.useCallback(async (connectionSlug: string, switchAccount?: boolean) => {
     try {
-      await window.electronAPI.sessionCommand(sessionId, { type: 'setConnection', connectionSlug })
+      await window.electronAPI.sessionCommand(sessionId, { type: 'setConnection', connectionSlug, switchAccount })
     } catch (error) {
-      // Connection change may fail if session already started or connection is invalid
       console.error('Failed to change connection:', error)
+      if (switchAccount) toast.error(t('chat.modelPicker.switchAccountFailed'))
     }
-  }, [sessionId])
+  }, [sessionId, t])
 
   // Check if session's locked connection has been removed
   const connectionUnavailable = React.useMemo(() =>

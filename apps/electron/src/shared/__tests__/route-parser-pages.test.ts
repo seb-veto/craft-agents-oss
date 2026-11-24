@@ -17,7 +17,7 @@ import {
   parseNavigationStateKey,
   isPagesNavigation,
   type NavigationState,
-} from '../types'
+} from '../navigation-types'
 import { routes } from '../routes'
 
 describe('pages routes', () => {

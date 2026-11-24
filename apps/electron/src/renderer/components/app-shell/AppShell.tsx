@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronDown,
   MoreHorizontal,
+  SlidersHorizontal,
   RotateCw,
   Flag,
   ListFilter,
@@ -21,6 +22,8 @@ import {
   DatabaseZap,
   Zap,
   Inbox,
+  Bell,
+  GitPullRequest,
   Globe,
   FolderOpen,
   Cake,
@@ -34,6 +37,9 @@ import {
   MailOpen,
   FolderKanban,
   PanelsTopLeft,
+  Target,
+  Star,
+  FileText,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -72,8 +78,11 @@ import { BoardListToggle } from "./kanban/BoardListToggle"
 import { PanelStackContainer } from "./PanelStackContainer"
 import { CompactSessionListFilter } from "./CompactSessionListFilter"
 import type { ChatDisplayHandle } from "./ChatDisplay"
-import type { SidebarItem as SidebarNavItem } from "./LeftSidebar"
+import type { LinkItem, SidebarItem as SidebarNavItem } from "./LeftSidebar"
+import { CustomizeSidebarDialog } from "./CustomizeSidebarDialog"
+import { normalizeSidebarLayout, partitionSidebarLayout, WORKSPACE_SIDEBAR_IDS, type SidebarLayout, type WorkspaceSidebarId } from "./sidebar-layout"
 import { SidebarPane } from "./SidebarPane"
+import { useWorkspaceInbox } from "../inbox/useWorkspaceInbox"
 import { SessionFilterMenu } from "./SessionFilterMenu"
 import { ShellResizeHandle } from "./ShellResizeHandle"
 import { useSession } from "@/hooks/useSession"
@@ -119,6 +128,8 @@ import {
   isAutomationsNavigation,
   isProjectsNavigation,
   isPagesNavigation,
+  isGoalsNavigation,
+  isDocumentsNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
@@ -129,6 +140,7 @@ import { ProjectsListPanel } from "./ProjectsListPanel"
 import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
 import { useAutomations } from "@/hooks/useAutomations"
 import { useProjects } from "@/hooks/useProjects"
+import { useDocumentFavorites } from "@/hooks/useDocumentFavorites"
 import { usePages } from "@/hooks/usePages"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { PanelHeader } from "./PanelHeader"
@@ -150,7 +162,8 @@ import {
 } from "./panel-constants"
 import { hasOpenOverlay } from "@/lib/overlay-detection"
 import { clearSourceIconCaches } from "@/lib/icon-cache"
-import { dispatchFocusInputEvent } from "./input/focus-input-events"
+import { clearPendingSelectionFocus, dispatchFocusInputEvent } from "./input/focus-input-events"
+import { canAutoFocusSessionComposer } from "./input/input-event-guards"
 
 /**
  * AppShellProps - Minimal props interface for AppShell component
@@ -230,6 +243,7 @@ function AppShellContent({
     onSendMessage,
     openNewChat,
     pendingPermissions,
+    pendingCredentials,
   } = contextValue
 
   const { t } = useTranslation()
@@ -332,9 +346,8 @@ function AppShellContent({
   // so the navigator (and its resize handle) collapse to zero width while it's active.
   const isBoardView = isSessionsNavigation(navState) && navState.viewMode === 'board'
 
-  // Pages behaves the same way: both the library grid and an open page render
-  // full-width in the content area — there is no pages navigator list.
-  const isPagesView = isPagesNavigation(navState)
+  // Workspace libraries and their details fill the content area without a navigator.
+  const isFullWidthView = navState.navigator === 'reviews' || navState.navigator === 'inbox' || isPagesNavigation(navState) || isGoalsNavigation(navState) || isDocumentsNavigation(navState)
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -362,8 +375,11 @@ function AppShellContent({
     }
   }, [sessionFilter])
 
+  const [viewFiltersWorkspaceId, setViewFiltersWorkspaceId] = React.useState(activeWorkspaceId)
   const [viewFiltersMap, setViewFiltersMap] = React.useState<ViewFiltersMap>(() => {
-    const saved = storage.get<ViewFiltersMap>(storage.KEYS.viewFilters, {})
+    const saved = activeWorkspaceId
+      ? storage.get<ViewFiltersMap>(storage.KEYS.viewFilters, {}, activeWorkspaceId)
+      : storage.get<ViewFiltersMap>(storage.KEYS.viewFilters, {})
     // Backward compat: migrate old format (arrays) into new format (Record<string, FilterMode>)
     if (saved.allSessions && Array.isArray((saved.allSessions as any).statuses)) {
       // Old format: { statuses: string[], labels: string[] } → new: { statuses: Record, labels: Record }
@@ -392,6 +408,11 @@ function AppShellContent({
     }
     return saved
   })
+  // Rehydrate before the persistence effect can write the previous workspace's preferences.
+  if (activeWorkspaceId !== viewFiltersWorkspaceId) {
+    setViewFiltersWorkspaceId(activeWorkspaceId)
+    setViewFiltersMap(activeWorkspaceId ? storage.get<ViewFiltersMap>(storage.KEYS.viewFilters, {}, activeWorkspaceId) : {})
+  }
 
   // Derive current view's status filter as a Map<SessionStatusId, FilterMode>
   const listFilter = useMemo(() => {
@@ -518,12 +539,13 @@ function AppShellContent({
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
 
-  // Grouping mode for chat list: per-view (stored in viewFiltersMap), forced to 'date' for state sub-views
+  // State sub-views offer only their existing Date order and Manual.
   const isStateSubView = sessionFilter?.kind === 'state'
 
-  const chatGroupingMode: ChatGroupingMode = isStateSubView
+  const savedGroupingMode = viewFiltersMap[sessionFilterKey ?? '']?.groupingMode
+  const chatGroupingMode: ChatGroupingMode = isStateSubView && savedGroupingMode !== 'manual'
     ? 'date'
-    : (viewFiltersMap[sessionFilterKey ?? '']?.groupingMode ?? 'date')
+    : savedGroupingMode ?? 'priority'
 
   const setChatGroupingMode = useCallback((mode: ChatGroupingMode) => {
     setViewFiltersMap(prev => {
@@ -634,18 +656,47 @@ function AppShellContent({
 
   const { projects } = useProjects(activeWorkspaceId)
   const { pages } = usePages(activeWorkspaceId)
+  const { favorites: favoriteDocuments } = useDocumentFavorites(activeWorkspaceId)
+  const [editingSidebarFor, setEditingSidebarFor] = useState<string | null>(null)
+  const [sidebarOverride, setSidebarOverride] = useState<{ workspaceId: string; layout: SidebarLayout } | null>(null)
+  const savedSidebarLayout = useMemo(() => normalizeSidebarLayout(activeWorkspaceId
+    ? storage.get<unknown>(storage.KEYS.workspaceSidebarLayout, null, activeWorkspaceId) : null), [activeWorkspaceId])
+  const sidebarLayout = sidebarOverride && sidebarOverride.workspaceId === activeWorkspaceId ? sidebarOverride.layout : savedSidebarLayout
+  const workspaceSidebar = useMemo(() => partitionSidebarLayout(sidebarLayout), [sidebarLayout])
+  const sidebarDialogOpen = !!activeWorkspaceId && editingSidebarFor === activeWorkspaceId
+  useEffect(() => {
+    setEditingSidebarFor(current => current === activeWorkspaceId ? current : null)
+  }, [activeWorkspaceId])
+  const openCustomizeSidebar = useCallback(() => {
+    if (activeWorkspaceId) setEditingSidebarFor(activeWorkspaceId)
+  }, [activeWorkspaceId])
+  const applySidebarLayout = (layout: SidebarLayout) => {
+    if (!activeWorkspaceId || editingSidebarFor !== activeWorkspaceId) return
+    const normalized = normalizeSidebarLayout(layout)
+    storage.set(storage.KEYS.workspaceSidebarLayout, normalized, activeWorkspaceId)
+    setSidebarOverride({ workspaceId: activeWorkspaceId, layout: normalized })
+    setEditingSidebarFor(null)
+  }
   const projectMenuOptions = useMemo(
     () => projects.map(p => ({ id: p.config.id, slug: p.config.slug, name: p.config.name, color: p.config.color })),
     [projects],
   )
-  const handleSessionProjectChange = useCallback(async (sessionId: string, projectId: string | null) => {
+  const handleSetSessionProjects = useCallback(async ([sessionId, ...additionalSessionIds]: string[], projectId: string | null) => {
+    if (!sessionId) return
     try {
-      await window.electronAPI.sessionCommand(sessionId, { type: 'setProjectId', projectId })
+      await window.electronAPI.sessionCommand(sessionId, {
+        type: 'setProjectId', projectId,
+        ...(additionalSessionIds.length > 0 ? { additionalSessionIds } : {}),
+      })
     } catch (err) {
       console.error('[AppShell] Failed to update session project:', err)
       toast.error(t('toast.failedToUpdateProject'))
     }
   }, [t])
+
+  const handleSessionProjectChange = useCallback((sessionId: string, projectId: string | null) => {
+    return handleSetSessionProjects([sessionId], projectId)
+  }, [handleSetSessionProjects])
 
   // Whether local MCP servers are enabled (affects stdio source status)
   const [localMcpEnabled, setLocalMcpEnabled] = React.useState(true)
@@ -735,9 +786,6 @@ function AppShellContent({
     // Load workspace-scoped state on BOTH initial mount AND workspace switch
     // This fixes CMD+R losing filters - previously only ran on workspace switch
     if (previousWorkspaceId !== activeWorkspaceId) {
-      const newViewFilters = storage.get<ViewFiltersMap>(storage.KEYS.viewFilters, {}, activeWorkspaceId)
-      setViewFiltersMap(newViewFilters)
-
       const newExpandedFolders = storage.get<string[]>(storage.KEYS.expandedFolders, [], activeWorkspaceId)
       setExpandedFolders(new Set(newExpandedFolders))
 
@@ -900,6 +948,19 @@ function AppShellContent({
     if (!targetSessionId) return
     dispatchFocusInputEvent({ sessionId: targetSessionId })
   }, [])
+
+  useEffect(() => () => clearPendingSelectionFocus(focusedSessionId), [focusedSessionId])
+
+  const focusSelectedSessionComposer = useCallback((targetSessionId: string) => {
+    if (!canAutoFocusSessionComposer(isAutoCompact)) return
+    const shouldFocus = () => store.get(focusedSessionIdAtom) === targetSessionId
+      && canAutoFocusSessionComposer(isAutoCompact)
+    // Row selection runs on mouse-down. Wait for the browser's own focus change
+    // and the destination panel before asking its composer to take focus.
+    requestAnimationFrame(() => {
+      if (shouldFocus()) dispatchFocusInputEvent({ sessionId: targetSessionId, shouldFocus })
+    })
+  }, [store, isAutoCompact])
 
   useAction('chat.cyclePermissionMode', () => {
     if (effectiveSessionId) {
@@ -1160,6 +1221,14 @@ function AppShellContent({
   const activeSessionMetas = useMemo(() => {
     return workspaceSessionMetas.filter(s => !s.isArchived)
   }, [workspaceSessionMetas])
+  const inbox = useWorkspaceInbox(activeWorkspaceId, workspaceSessionMetas, pendingPermissions, pendingCredentials)
+  const [reviewCounter, setReviewCounter] = useState<{ workspaceId: string; count: number } | null>(null)
+  const onReviewCountChange = useCallback((count: number) => {
+    if (activeWorkspaceId) setReviewCounter(current => current?.workspaceId === activeWorkspaceId && current.count === count ? current : { workspaceId: activeWorkspaceId, count })
+  }, [activeWorkspaceId])
+  const reviewCount = reviewCounter?.workspaceId === activeWorkspaceId ? reviewCounter?.count : undefined
+  const inboxBadge = inbox.preferences.badge === 'none' ? 0 : inbox.preferences.badge === 'priority' && inbox.preferences.prioritize
+    ? inbox.unread.filter(entry => entry.priority).length : inbox.unread.length
 
   const refreshWorkspaceUnreadMap = useCallback(async () => {
     try {
@@ -1425,6 +1494,8 @@ function AppShellContent({
   // Extend context value with local overrides (wrapped onDeleteSession, sources, skills, labels, enabledModes, rightSidebarOpenButton, effectiveSessionStatuses)
   const appShellContextValue = React.useMemo<AppShellContextType>(() => ({
     ...contextValue,
+    inbox,
+    onReviewCountChange,
     onDeleteSession: handleDeleteSession,
     enabledSources: sources,
     skills,
@@ -1432,6 +1503,8 @@ function AppShellContent({
     activeSessionWorkingDirectory,
     labels: displayLabelConfigs,
     onSessionLabelsChange: handleSessionLabelsChange,
+    projectMenuOptions,
+    onSetSessionProjects: handleSetSessionProjects,
     enabledModes,
     sessionStatuses: effectiveSessionStatuses,
     onSessionSourcesChange: handleSessionSourcesChange,
@@ -1450,7 +1523,7 @@ function AppShellContent({
     automationTestResults,
     getAutomationHistory,
     onReplayAutomation: handleReplayAutomation,
-  }), [contextValue, handleDeleteSession, sources, skills, chatStarters, activeSessionWorkingDirectory, displayLabelConfigs, handleSessionLabelsChange, enabledModes, effectiveSessionStatuses, handleSessionSourcesChange, handleJumpToTaskSessions, isAutoCompact, searchActive, searchQuery, handleChatMatchInfoChange, handleTestAutomation, handleToggleAutomation, handleDuplicateAutomation, handleDeleteAutomation, automationTestResults, getAutomationHistory, handleReplayAutomation])
+  }), [contextValue, inbox, onReviewCountChange, handleDeleteSession, sources, skills, chatStarters, activeSessionWorkingDirectory, displayLabelConfigs, handleSessionLabelsChange, projectMenuOptions, handleSetSessionProjects, enabledModes, effectiveSessionStatuses, handleSessionSourcesChange, handleJumpToTaskSessions, isAutoCompact, searchActive, searchQuery, handleChatMatchInfoChange, handleTestAutomation, handleToggleAutomation, handleDuplicateAutomation, handleDeleteAutomation, automationTestResults, getAutomationHistory, handleReplayAutomation])
 
   // Persist expanded folders to localStorage (workspace-scoped)
   React.useEffect(() => {
@@ -1566,6 +1639,28 @@ function AppShellContent({
   }, [])
 
   // Handler for pages view
+  const handleFavoritesClick = useCallback(() => {
+    if (favoriteDocuments.length > 0) toggleExpanded('nav:favorites')
+    else navigate(routes.view.documents())
+  }, [favoriteDocuments.length, toggleExpanded])
+
+  const [moreExpandedFor, setMoreExpandedFor] = useState<string | null>(null)
+  const workspaceMoreExpanded = !!activeWorkspaceId && moreExpandedFor === activeWorkspaceId
+  const handleToggleWorkspaceMore = useCallback(() => {
+    setMoreExpandedFor(previous => previous === activeWorkspaceId ? null : activeWorkspaceId || null)
+  }, [activeWorkspaceId])
+
+  const handleInboxClick = useCallback(() => navigate(routes.view.inbox()), [])
+  const handleReviewsClick = useCallback(() => navigate(routes.view.reviews()), [])
+
+  const handleDocumentsClick = useCallback(() => {
+    navigate(routes.view.documents())
+  }, [])
+
+  const handleGoalsClick = useCallback(() => {
+    navigate(routes.view.goals())
+  }, [])
+
   const handlePagesClick = useCallback(() => {
     navigate(routes.view.pages())
   }, [])
@@ -1834,7 +1929,10 @@ function AppShellContent({
   }
 
   const unifiedSidebarItems = React.useMemo((): SidebarItem[] => {
-    const result: SidebarItem[] = []
+    const result: SidebarItem[] = [
+      { id: 'nav:inbox', type: 'nav', action: handleInboxClick },
+      { id: 'nav:reviews', type: 'nav', action: handleReviewsClick },
+    ]
 
     // 1. Sessions section: All Sessions (expandable) with status items, Flagged, Archived as children
     result.push({ id: 'nav:allSessions', type: 'nav', action: handleAllSessionsClick })
@@ -1857,17 +1955,32 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Skills, Projects, Pages, Automations, Settings (visual order)
-    result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
-    result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
-    result.push({ id: 'nav:projects', type: 'nav', action: handleProjectsClick })
-    result.push({ id: 'nav:pages', type: 'nav', action: handlePagesClick })
-    result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
+    // Workspace rows follow the same order and More disclosure as the rendered sidebar.
+    const actions: Record<WorkspaceSidebarId, () => void> = {
+      'nav:favorites': handleFavoritesClick, 'nav:sources': handleSourcesClick,
+      'nav:skills': handleSkillsClick, 'nav:projects': handleProjectsClick,
+      'nav:pages': handlePagesClick, 'nav:automations': handleAutomationsClick,
+      'nav:goals': handleGoalsClick, 'nav:documents': handleDocumentsClick,
+    }
+    const appendWorkspaceItem = (id: WorkspaceSidebarId) => {
+      result.push({ id, type: 'nav', action: actions[id] })
+      if (id === 'nav:favorites' && isExpanded(id)) {
+        for (const doc of favoriteDocuments) {
+          result.push({ id: `nav:favorite:${doc.id}`, type: 'nav', action: () => navigate(routes.view.documents(doc.id)) })
+        }
+      }
+    }
+    workspaceSidebar.visible.forEach(appendWorkspaceItem)
+    if (workspaceSidebar.more.length) {
+      result.push({ id: 'nav:workspace-more', type: 'nav', action: handleToggleWorkspaceMore })
+      if (workspaceMoreExpanded) workspaceSidebar.more.forEach(appendWorkspaceItem)
+    }
+    if (activeWorkspaceId) result.push({ id: 'nav:customize-sidebar', type: 'nav', action: openCustomizeSidebar })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
-  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleProjectsClick, handlePagesClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
+  }, [handleInboxClick, handleReviewsClick, handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleProjectsClick, handlePagesClick, handleAutomationsClick, handleGoalsClick, handleDocumentsClick, handleFavoritesClick, favoriteDocuments, isExpanded, handleSettingsClick, handleWhatsNewClick, workspaceSidebar, workspaceMoreExpanded, handleToggleWorkspaceMore, activeWorkspaceId, openCustomizeSidebar])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -1961,10 +2074,10 @@ function AppShellContent({
 
   // Focus sidebar item when sidebar zone gains focus
   React.useEffect(() => {
-    if (sidebarFocused && unifiedSidebarItems.length > 0) {
-      // Set focused item if not already set
-      const itemId = focusedSidebarItemId || unifiedSidebarItems[0].id
-      if (!focusedSidebarItemId) {
+    if (!sidebarDialogOpen && sidebarFocused && unifiedSidebarItems.length > 0) {
+      const itemId = unifiedSidebarItems.some(item => item.id === focusedSidebarItemId)
+        ? focusedSidebarItemId! : unifiedSidebarItems[0].id
+      if (itemId !== focusedSidebarItemId) {
         setFocusedSidebarItemId(itemId)
       }
       // Actually focus the DOM element
@@ -1972,7 +2085,7 @@ function AppShellContent({
         sidebarItemRefs.current.get(itemId)?.focus()
       })
     }
-  }, [sidebarFocused, focusedSidebarItemId, unifiedSidebarItems])
+  }, [sidebarFocused, focusedSidebarItemId, unifiedSidebarItems, sidebarDialogOpen])
 
   // Get title based on navigation state
   const listTitle = React.useMemo(() => {
@@ -2087,7 +2200,17 @@ function AppShellContent({
 
 
   // Sidebar navigation (scrolls) and the pinned footer (Settings, What's New — always visible).
-  const sidebarLinks: SidebarNavItem[] = [
+  const coreSidebarLinks: SidebarNavItem[] = [
+    {
+      id: 'nav:inbox', title: t('inbox.title', { defaultValue: 'Inbox' }), icon: Bell,
+      label: inboxBadge ? String(inboxBadge) : undefined,
+      variant: navState.navigator === 'inbox' ? 'default' : 'ghost', onClick: handleInboxClick,
+    },
+    {
+      id: 'nav:reviews', title: t('reviews.title', { defaultValue: 'Reviews' }), icon: GitPullRequest,
+      label: reviewCount ? String(reviewCount) : undefined,
+      variant: navState.navigator === 'reviews' ? 'default' : 'ghost', onClick: handleReviewsClick,
+    },
     // --- Sessions Section ---
     // All Sessions: expandable with status children (sortable) + Flagged & Archived as trailing items
     {
@@ -2180,6 +2303,26 @@ function AppShellContent({
     },
     // --- Workspace section ---
     { id: "section:workspace", type: "section", title: t("sidebar.workspaceSection") },
+  ]
+  const workspaceSidebarLinks: LinkItem[] = [
+    {
+      id: "nav:favorites",
+      title: t("documents.sidebarFavorites", { defaultValue: "Favorites" }),
+      icon: Star,
+      label: favoriteDocuments.length ? String(favoriteDocuments.length) : undefined,
+      variant: "ghost",
+      onClick: handleFavoritesClick,
+      expandable: favoriteDocuments.length > 0,
+      expanded: isExpanded('nav:favorites'),
+      onToggle: handleFavoritesClick,
+      items: favoriteDocuments.map(doc => ({
+        id: `nav:favorite:${doc.id}`,
+        title: doc.title || t("documents.untitled", { defaultValue: "Untitled document" }),
+        icon: FileText,
+        variant: isDocumentsNavigation(navState) && navState.details?.documentId === doc.id ? "default" : "ghost",
+        onClick: () => navigate(routes.view.documents(doc.id)),
+      })),
+    },
     // --- Sources & Skills Section ---
     {
       id: "nav:sources",
@@ -2337,8 +2480,44 @@ function AppShellContent({
         },
       ],
     },
+    {
+      id: "nav:goals",
+      title: t("goals.title", { defaultValue: "Goals" }),
+      icon: Target,
+      variant: isGoalsNavigation(navState) ? "default" : "ghost",
+      onClick: handleGoalsClick,
+    },
+    {
+      id: "nav:documents",
+      title: t("documents.title", { defaultValue: "Documents" }),
+      icon: FileText,
+      variant: isDocumentsNavigation(navState) ? "default" : "ghost",
+      onClick: handleDocumentsClick,
+    },
   ]
+  const workspaceLinksById = new Map(workspaceSidebarLinks.map(link => [link.id, link]))
+  const orderedWorkspaceLinks = (ids: WorkspaceSidebarId[]) => ids.flatMap(id => {
+    const link = workspaceLinksById.get(id)
+    return link ? [link] : []
+  })
+  const moreLinks = orderedWorkspaceLinks(workspaceSidebar.more)
+  const sidebarLinks: SidebarNavItem[] = [...coreSidebarLinks, ...orderedWorkspaceLinks(workspaceSidebar.visible)]
+  if (moreLinks.length) sidebarLinks.push({
+    id: 'nav:workspace-more', title: t('sidebar.moreWorkspaceItems', { defaultValue: 'More' }),
+    icon: MoreHorizontal, variant: !workspaceMoreExpanded && moreLinks.some(link => link.variant === 'default') ? 'default' : 'ghost',
+    expandable: true, expanded: workspaceMoreExpanded, onClick: handleToggleWorkspaceMore,
+    onToggle: handleToggleWorkspaceMore, items: moreLinks,
+  })
+  const sidebarCustomizationOptions = orderedWorkspaceLinks([...WORKSPACE_SIDEBAR_IDS]).map(link => {
+    const Icon = link.icon
+    return { id: link.id as WorkspaceSidebarId, title: link.title, icon: typeof Icon === 'function' || (typeof Icon === 'object' && Icon !== null && 'render' in Icon)
+      ? React.createElement(Icon as typeof Star, { className: 'size-4', 'aria-hidden': true }) : Icon as React.ReactNode }
+  })
   const sidebarFooterLinks: SidebarNavItem[] = [
+    ...(activeWorkspaceId ? [{
+      id: 'nav:customize-sidebar', title: t('sidebar.customize', { defaultValue: 'Customize sidebar' }),
+      icon: SlidersHorizontal, variant: 'ghost' as const, onClick: openCustomizeSidebar,
+    }] : []),
     // --- Settings ---
     {
       id: "nav:settings",
@@ -2615,6 +2794,7 @@ function AppShellContent({
                   onMarkUnread={onMarkSessionUnread}
                   onSessionStatusChange={onSessionStatusChange}
                   onRename={onRenameSession}
+                  onFocusSelectedSession={focusSelectedSessionComposer}
                   onFocusChatInput={(targetSessionId) => {
                     focusChatInputForSession(targetSessionId ?? focusedSessionId ?? session.selected)
                   }}
@@ -2666,7 +2846,7 @@ function AppShellContent({
             )}
             </div>
           }
-          navigatorWidth={isAutoCompact ? sessionListWidth : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView ? 0 : sessionListWidth)}
+          navigatorWidth={isAutoCompact ? sessionListWidth : (effectiveSidebarAndNavigatorHidden || isBoardView || isFullWidthView ? 0 : sessionListWidth)}
           isSidebarAndNavigatorHidden={effectiveSidebarAndNavigatorHidden}
           isRightSidebarVisible={false}
           isCompact={isAutoCompact}
@@ -2687,7 +2867,7 @@ function AppShellContent({
         )}
         {/* The list and the content share one card, so the list seam is the card's inner hairline
             (hidden in board view and pages, where the list is collapsed) */}
-        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && (
+        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isFullWidthView && (
           <ShellResizeHandle
             handleRef={sessionListHandleRef}
             left={(isSidebarVisible ? sidebarWidth + PANEL_GAP : PANEL_EDGE_INSET) + sessionListWidth - PANEL_SASH_HALF_HIT_WIDTH}
@@ -2878,6 +3058,13 @@ function AppShellContent({
           />
         </>
       )}
+
+      {sidebarDialogOpen && <CustomizeSidebarDialog key={activeWorkspaceId} layout={sidebarLayout}
+        options={sidebarCustomizationOptions} onApply={applySidebarLayout} onClose={() => setEditingSidebarFor(null)}
+        onRestoreFocus={() => {
+          setFocusedSidebarItemId('nav:customize-sidebar')
+          sidebarItemRefs.current.get('nav:customize-sidebar')?.focus()
+        }} />}
 
       {/* What's New overlay */}
       <DocumentFormattedMarkdownOverlay

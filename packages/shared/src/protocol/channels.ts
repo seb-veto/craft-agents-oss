@@ -371,6 +371,11 @@ export const RPC_CHANNELS = {
     /** Creates a worktree (cloning first for a GitHub-only repo) for a new Coding session */
     CREATE_WORKTREE: 'git:createWorktree',
   },
+  /** Personal, read-only GitHub Reviews queues and PR details. */
+  reviews: {
+    LIST: 'reviews:list',
+    GET: 'reviews:get',
+  },
   /** Coding mode PR watcher (chat header PR chip): see protocol/pr-watch.ts */
   prWatch: {
     SUBSCRIBE: 'prWatch:subscribe',
@@ -442,6 +447,21 @@ export const RPC_CHANNELS = {
     DELETE_ASSET: 'projects:deleteAsset',
     CHANGED: 'projects:changed',
   },
+  goals: {
+    GET: 'goals:get',
+    GET_ONE: 'goals:getOne',
+    CREATE: 'goals:create',
+    ACTION: 'goals:action',
+    CHANGED: 'goals:changed',
+  },
+  documents: {
+    GET: 'documents:get',
+    GET_ONE: 'documents:getOne',
+    CREATE: 'documents:create',
+    UPDATE: 'documents:update',
+    DELETE: 'documents:delete',
+    CHANGED: 'documents:changed',
+  },
   pages: {
     GET: 'pages:get',
     GET_ONE: 'pages:getOne',
@@ -467,6 +487,11 @@ export const RPC_CHANNELS = {
     GET_THUMBNAIL: 'pages:getThumbnail',
     REGENERATE_THUMBNAIL: 'pages:regenerateThumbnail',
     CHANGED: 'pages:changed',
+  },
+  sessionPins: {
+    GET: 'sessionPins:get',
+    UPDATE: 'sessionPins:update',
+    CHANGED: 'sessionPins:changed',
   },
   messaging: {
     // WhatsApp subprocess → Gateway (subprocess invokes on server)

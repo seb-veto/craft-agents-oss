@@ -367,6 +367,9 @@ export interface SessionToolContext {
    */
   pages?: PagesToolCallbacks;
 
+  /** Host-injected callbacks bound to this session's actual workspace and Goal actor. */
+  goals?: GoalToolCallbacks;
+
   // ============================================================
   // MCP source resources & prompts (source_list_resources /
   //   source_read_resource / source_list_prompts / source_get_prompt)
@@ -700,6 +703,38 @@ export interface PagesToolCallbacks {
   updatePage(slug: string, patch: UpdatePageToolPatch): Promise<PageToolDetails>;
   writePageData(slug: string, patch: PageDataToolPatch): Promise<PageDataWriteSummary>;
   deletePage(slug: string): Promise<DeletePageToolResult>;
+}
+
+export type GoalToolRole = 'owner' | 'verifier';
+
+export interface GoalToolCriterionResult {
+  id: string;
+  status: 'pass' | 'fail';
+  evidence: string;
+  note?: string;
+}
+
+/** Only the fields shipped to the actor. The host may return its full Goal aggregate. */
+export interface GoalToolSnapshot {
+  id: string;
+  title: string;
+  description: string;
+  state: 'draft' | 'active' | 'waiting_on_user' | 'verifying' | 'done' | 'paused' | 'stopped' | 'blocked';
+  revision: number;
+  criteria: Array<{ id: string; text: string; status: 'pending' | 'pass' | 'fail'; evidence?: string; note?: string }>;
+  folderPath: string;
+  question?: { text: string; askedAt: string };
+  blockedReason?: string;
+}
+
+/** Host authorization is authoritative. No user actions, actor IDs, or workspace selectors. */
+export interface GoalToolCallbacks {
+  get(goalId: string): GoalToolSnapshot | Promise<GoalToolSnapshot>;
+  progress(goalId: string, revision: number, message: string): GoalToolSnapshot | Promise<GoalToolSnapshot>;
+  ask(goalId: string, revision: number, question: string): GoalToolSnapshot | Promise<GoalToolSnapshot>;
+  evidence(goalId: string, revision: number, filename: string, content: string): string | Promise<string>;
+  requestVerification(goalId: string, revision: number): GoalToolSnapshot | Promise<GoalToolSnapshot>;
+  verdict(goalId: string, revision: number, results: GoalToolCriterionResult[], message: string): GoalToolSnapshot | Promise<GoalToolSnapshot>;
 }
 
 // ============================================================

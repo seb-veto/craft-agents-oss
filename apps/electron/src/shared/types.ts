@@ -657,6 +657,10 @@ export interface ElectronAPI {
   /** Creates a new session's worktree (cloning a GitHub-only repo first); rejects with git's reason */
   createCodingWorktree(workspaceId: string, request: import('@craft-agent/shared/protocol').CreateWorktreeRequest, recentDirs: string[]): Promise<import('@craft-agent/shared/protocol').CreateWorktreeResult>
 
+  // Personal GitHub Reviews (read-only)
+  listReviews(workspaceId: string, includeTeams: boolean): Promise<import('@craft-agent/shared/protocol').ReviewsQueue>
+  getReview(workspaceId: string, ref: import('@craft-agent/shared/protocol').ReviewRef): Promise<import('@craft-agent/shared/protocol').ReviewDetail>
+
   // PR watcher (Coding mode): subscribe per session, then receive pushes; see protocol/pr-watch.ts
   prWatchSubscribe(sessionId: string): Promise<{ subscriptionId: string | null; state: import('@craft-agent/shared/protocol').PrWatchSessionState }>
   prWatchUnsubscribe(subscriptionId: string): Promise<void>
@@ -730,6 +734,11 @@ export interface ElectronAPI {
   setSubagentModel(model: 'haiku' | 'sonnet' | null): Promise<void>
   setWorkspaceDefaultLlmConnection(workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }>
 
+  // Ordered chat pins (workspace-scoped, independent of flags)
+  getPinnedSessions(workspaceId: string): Promise<string[]>
+  updatePinnedSessions(workspaceId: string, action: import('@craft-agent/shared/sessions').SessionPinAction): Promise<string[]>
+  onPinnedSessionsChanged(callback: (workspaceId: string, sessionIds: string[]) => void): () => void
+
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>
   getProject(workspaceId: string, projectIdOrSlug: string): Promise<unknown | null>
@@ -740,6 +749,21 @@ export interface ElectronAPI {
   uploadProjectAsset(workspaceId: string, projectSlug: string, input: { filename: string; base64?: string; text?: string; sourcePath?: string }): Promise<import('@craft-agent/shared/projects/types').ProjectAsset>
   deleteProjectAsset(workspaceId: string, projectSlug: string, filename: string): Promise<void>
   onProjectsChanged(callback: (workspaceId: string, projects: unknown) => void): () => void
+
+  // Native Goals — human controls; agent callbacks are host-bound and not exposed here.
+  getGoals(workspaceId: string): Promise<import('@craft-agent/shared/goals/types').Goal[]>
+  getGoal(workspaceId: string, goalId: string): Promise<import('@craft-agent/shared/goals/types').Goal | null>
+  createGoal(workspaceId: string, input: import('@craft-agent/shared/goals/types').CreateGoalInput): Promise<import('@craft-agent/shared/goals/types').Goal>
+  goalAction(workspaceId: string, goalId: string, action: import('@craft-agent/shared/goals/types').GoalUserAction): Promise<import('@craft-agent/shared/goals/types').Goal>
+  onGoalsChanged(callback: (workspaceId: string, goals: import('@craft-agent/shared/goals/types').Goal[]) => void): () => void
+
+  // Native Documents (workspace-scoped; revision-checked autosave)
+  getDocuments(workspaceId: string): Promise<import('@craft-agent/shared/documents/types').WorkspaceDocument[]>
+  getDocument(workspaceId: string, id: string): Promise<import('@craft-agent/shared/documents/types').WorkspaceDocument | null>
+  createDocument(workspaceId: string, input?: import('@craft-agent/shared/documents/types').DocumentCreateInput): Promise<import('@craft-agent/shared/documents/types').WorkspaceDocument>
+  updateDocument(workspaceId: string, id: string, input: import('@craft-agent/shared/documents/types').DocumentUpdateInput): Promise<import('@craft-agent/shared/documents/types').WorkspaceDocument>
+  deleteDocument(workspaceId: string, id: string): Promise<void>
+  onDocumentsChanged(callback: (workspaceId: string) => void): () => void
 
   // Pages (workspace-scoped mini dashboards)
   getPages(workspaceId: string): Promise<import('@craft-agent/shared/pages/types').LoadedPage[]>

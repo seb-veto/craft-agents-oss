@@ -28,6 +28,8 @@ import { useTranslation } from 'react-i18next'
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
   AppWindow,
   Check,
   ChevronLeft,
@@ -44,6 +46,8 @@ import {
   MailOpen,
   MessageSquare,
   Pencil,
+  Pin,
+  PinOff,
   RefreshCw,
   Send,
   Tag,
@@ -71,6 +75,7 @@ import {
   type SessionStatus,
   type SessionStatusId,
 } from '@/config/session-status-config'
+import type { SessionMenuProps } from './SessionMenu'
 import type { SessionMeta } from '@/atoms/sessions'
 import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/session'
 import { getFileManagerName } from '@/lib/platform'
@@ -90,8 +95,12 @@ export interface CompactSessionMenuProps {
   labels?: LabelConfig[]
   hasTransferTargets?: boolean
 
+  pinControls?: SessionMenuProps['pinControls']
+
   // Callbacks — same as SessionMenu
   onLabelsChange?: (labels: string[]) => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onRename: () => void
   onFlag: () => void
   onUnflag: () => void
@@ -131,6 +140,9 @@ export function CompactSessionMenu({
   labels = [],
   hasTransferTargets,
   onLabelsChange,
+  pinControls,
+  onMoveUp,
+  onMoveDown,
   onRename,
   onFlag,
   onUnflag,
@@ -253,6 +265,7 @@ export function CompactSessionMenu({
               currentSessionStatus={currentSessionStatus}
               labelsCount={actions.appliedLabelIds.size}
               hasLabels={labels.length > 0}
+              pinControls={pinControls ? { ...pinControls, onPin: closeAfter(pinControls.onPin)!, onUnpin: closeAfter(pinControls.onUnpin)!, onMoveUp: pinControls.onMoveUp ? closeAfter(pinControls.onMoveUp) : undefined, onMoveDown: pinControls.onMoveDown ? closeAfter(pinControls.onMoveDown) : undefined } : undefined}
               isFlagged={isFlagged}
               isArchived={isArchived}
               hasMessages={_hasMessages}
@@ -270,6 +283,8 @@ export function CompactSessionMenu({
               onArchive={closeAfter(onArchive)}
               onUnarchive={closeAfter(onUnarchive)}
               onMarkUnread={closeAfter(onMarkUnread)}
+              onMoveUp={onMoveUp ? closeAfter(onMoveUp) : undefined}
+              onMoveDown={onMoveDown ? closeAfter(onMoveDown) : undefined}
               onRename={closeAfter(onRename)}
               onRefreshTitle={closeAfter(actions.refreshTitle)}
               onOpenInNewPanel={closeAfter(actions.openInNewPanel)}
@@ -322,6 +337,7 @@ export function CompactSessionMenu({
 // ---------------------------------------------------------------------------
 
 interface RootPaneProps {
+  pinControls?: SessionMenuProps['pinControls']
   sharedUrl?: string
   sessionStatuses: SessionStatus[]
   currentSessionStatus: SessionStatusId
@@ -344,6 +360,8 @@ interface RootPaneProps {
   onArchive?: () => void
   onUnarchive?: () => void
   onMarkUnread?: () => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onRename?: () => void
   onRefreshTitle?: () => void
   onOpenInNewPanel?: () => void
@@ -354,6 +372,7 @@ interface RootPaneProps {
 }
 
 function RootPane({
+  pinControls,
   sharedUrl,
   sessionStatuses,
   currentSessionStatus,
@@ -376,6 +395,8 @@ function RootPane({
   onArchive,
   onUnarchive,
   onMarkUnread,
+  onMoveUp,
+  onMoveDown,
   onRename,
   onRefreshTitle,
   onOpenInNewPanel,
@@ -440,6 +461,11 @@ function RootPane({
         />
       )}
 
+      {pinControls && <>
+        <Row icon={pinControls.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />} label={t(pinControls.pinned ? 'session.pin.unpin' : 'session.pin.pin')} onTap={pinControls.pinned ? pinControls.onUnpin : pinControls.onPin} />
+        {pinControls.pinned && pinControls.onMoveUp && <Row icon={<ArrowUp className="h-4 w-4" />} label={t('session.pin.moveUp')} onTap={pinControls.onMoveUp} />}
+        {pinControls.pinned && pinControls.onMoveDown && <Row icon={<ArrowDown className="h-4 w-4" />} label={t('session.pin.moveDown')} onTap={pinControls.onMoveDown} />}
+      </>}
       {!isFlagged ? (
         <Row icon={<Flag className="h-4 w-4 text-info" />} label={t('sessionMenu.flag')} onTap={onFlag} />
       ) : (
@@ -458,6 +484,8 @@ function RootPane({
 
       <Separator />
 
+      {onMoveUp && <Row icon={<ArrowUp className="size-4" />} label={t('sessionMenu.moveUp')} onTap={onMoveUp} />}
+      {onMoveDown && <Row icon={<ArrowDown className="size-4" />} label={t('sessionMenu.moveDown')} onTap={onMoveDown} />}
       <Row icon={<Pencil className="h-4 w-4" />} label={t('common.rename')} onTap={onRename} />
       <Row icon={<RefreshCw className="h-4 w-4" />} label={t('sessionMenu.regenerateTitle')} onTap={onRefreshTitle} />
 

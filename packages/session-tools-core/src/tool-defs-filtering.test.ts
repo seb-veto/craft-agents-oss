@@ -110,10 +110,10 @@ describe('session tool filtering helpers', () => {
   describe('agent profile', () => {
     const names = (options?: Parameters<typeof getSessionToolDefs>[0]) => getSessionToolDefs(options).map(d => d.name);
 
-    it('default profile: every tool except the Coding-only PR tools', () => {
+    it('default profile: every enabled tool except Coding-only and unassigned Goals tools', () => {
       expect(names({ profile: 'default' })).toEqual(names());
       expect(names({ profile: 'default', includeDecide: true })).toEqual(names({ includeDecide: true }));
-      expect(names({ includeDecide: true })).toEqual(SESSION_TOOL_DEFS.map(d => d.name).filter(name => !CODING_ONLY_TOOLS.has(name)));
+      expect(names({ includeDecide: true })).toEqual(SESSION_TOOL_DEFS.filter(d => !CODING_ONLY_TOOLS.has(d.name) && !d.goalRoles).map(d => d.name));
       expect([...CODING_ONLY_TOOLS]).toEqual(['pr_status', 'pr_bind', 'pr_unbind', 'pr_set_auto_merge']);
       for (const name of CODING_ONLY_TOOLS) {
         expect(names()).not.toContain(name);

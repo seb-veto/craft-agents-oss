@@ -20,7 +20,7 @@ import { AUTO_FIX_CLIENT_ID, createAutoFixMonitor, type AutoFixMonitor } from '.
 import { createPrWatchOps } from '../../pr-watch/operations'
 import { githubGraphql } from '../../services/pr-watch/github-client'
 import { PrWatchRegistry } from '../../services/pr-watch/registry'
-import { tokenCandidates, type GitHubSourceLike } from '../../services/pr-watch/token-chain'
+import { workspaceGitHubTokenCandidates } from '../../services/pr-watch/workspace-credentials'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.prWatch.SUBSCRIBE,
@@ -53,29 +53,6 @@ export function cleanupPrWatchForClient(clientId: string): void {
 
 const resolveWorkspaceRootPath = (workspaceId: string) => getWorkspaceByNameOrId(workspaceId)?.rootPath ?? null
 
-/**
- * The workspace's GitHub sources (API or MCP, enabled) as token candidates. OAuth tokens go through
- * the refresh manager; a source without a stored credential is skipped without touching it.
- */
-async function loadGitHubSources(workspaceRootPath: string): Promise<GitHubSourceLike[]> {
-  const { loadWorkspaceSources, getSourceCredentialManager, TokenRefreshManager } = await import('@craft-agent/shared/sources')
-  const credentials = getSourceCredentialManager()
-  const refresh = new TokenRefreshManager(credentials)
-  return loadWorkspaceSources(workspaceRootPath)
-    .filter(source => source.config.provider === 'github' && source.config.enabled !== false && (source.config.type === 'api' || source.config.type === 'mcp'))
-    .map(source => ({
-      slug: source.config.slug,
-      name: source.config.name,
-      getToken: async () => {
-        const stored = await credentials.load(source)
-        if (!stored?.value) return null
-        const token = stored.refreshToken ? (await refresh.ensureFreshToken(source)).token ?? null : stored.value
-        // Header-map credentials (JSON) are not bearer tokens
-        return token && !token.trimStart().startsWith('{') ? token : null
-      },
-    }))
-}
-
 export function registerPrWatchHandlers(server: RpcServer, deps: HandlerDeps): void {
   const log = deps.platform.logger
   autoFixMonitor?.dispose()
@@ -83,7 +60,7 @@ export function registerPrWatchHandlers(server: RpcServer, deps: HandlerDeps): v
   let monitor: AutoFixMonitor | null = null
   const current = new PrWatchRegistry({
     graphql: (host, token, query, variables) => githubGraphql(host, token, query, variables),
-    candidates: async (host, workspaceRootPath) => tokenCandidates(host, await loadGitHubSources(workspaceRootPath).catch(() => [])),
+    candidates: workspaceGitHubTokenCandidates,
     push: (clientId, sessionId, state) => {
       // Auto-fix's own subscription: evaluate instead of sending anywhere
       if (clientId === AUTO_FIX_CLIENT_ID) return monitor?.onState(sessionId, state)

@@ -27,6 +27,7 @@ import {
   Flag,
   Inbox,
   Layers,
+  GripVertical,
   ListFilter,
   MailOpen,
   Search,
@@ -293,25 +294,41 @@ export function CompactSessionListFilter({
             </div>
           )}
 
-          {!isSearching && !isStateSubView && (
+          {!isSearching && (
             <Section title={t('sidebar.group')} icon={<Layers className="h-3.5 w-3.5" />}>
+              <FilterRow
+                icon={<Flag className="h-4 w-4" />}
+                label={t('sidebar.groupByPriority')}
+                radioSelected={chatGroupingMode === 'priority'}
+                onTap={() => setChatGroupingMode('priority')}
+              />
               <FilterRow
                 icon={<Calendar className="h-4 w-4" />}
                 label={t('sidebar.groupByDate')}
                 radioSelected={chatGroupingMode === 'date'}
                 onTap={() => setChatGroupingMode('date')}
               />
+              {!isStateSubView && (
+                <>
+                  <FilterRow
+                    icon={<Inbox className="h-4 w-4" />}
+                    label={t('sidebar.groupByStatus')}
+                    radioSelected={chatGroupingMode === 'status'}
+                    onTap={() => setChatGroupingMode('status')}
+                  />
+                  <FilterRow
+                    icon={<MailOpen className="h-4 w-4" />}
+                    label={t('sidebar.groupByUnread')}
+                    radioSelected={chatGroupingMode === 'unread'}
+                    onTap={() => setChatGroupingMode('unread')}
+                  />
+                </>
+              )}
               <FilterRow
-                icon={<Inbox className="h-4 w-4" />}
-                label={t('sidebar.groupByStatus')}
-                radioSelected={chatGroupingMode === 'status'}
-                onTap={() => setChatGroupingMode('status')}
-              />
-              <FilterRow
-                icon={<MailOpen className="h-4 w-4" />}
-                label={t('sidebar.groupByUnread')}
-                radioSelected={chatGroupingMode === 'unread'}
-                onTap={() => setChatGroupingMode('unread')}
+                icon={<GripVertical className="h-4 w-4" />}
+                label={t('sidebar.groupByManual')}
+                radioSelected={chatGroupingMode === 'manual'}
+                onTap={() => setChatGroupingMode('manual')}
               />
             </Section>
           )}

@@ -112,6 +112,38 @@ describe('message admission', () => {
     expect(managed.isProcessing).toBe(false)
   })
 
+  it('rejects goal admission into a busy session without queueing or steering', async () => {
+    const { managed } = idleSession('goal-busy')
+    managed.isProcessing = true
+    await expect(sm.admitMessage('goal-busy', 'goal wake', undefined, undefined, { hidden: true }, () => {})).rejects.toThrow('session is busy')
+    expect(managed.messageQueue).toHaveLength(0)
+    expect(managed.messages).toHaveLength(0)
+  })
+
+  it('rechecks goal permission after asynchronous session loading, before persisting the message', async () => {
+    const { managed } = idleSession('goal-aborted')
+    const controller = new AbortController()
+    ;(sm as any).ensureMessagesLoaded = async () => { controller.abort(new Error('Cancelled while preparing goal wake')) }
+    await expect(sm.admitMessage('goal-aborted', 'goal wake', undefined, undefined, { hidden: true },
+      () => controller.signal.throwIfAborted())).rejects.toThrow('Cancelled while preparing')
+    expect(managed.isProcessing).toBe(false)
+    expect(managed.messages).toHaveLength(0)
+    expect(persistedMessageIds('goal-aborted')).toHaveLength(0)
+  })
+
+  it('hard-stops the assigned root and its same-workspace descendants, including idle keep-alive work', async () => {
+    const parent = idleSession('goal-parent').managed
+    const child = idleSession('goal-child').managed
+    const other = idleSession('goal-unrelated').managed
+    child.parentSessionId = parent.id
+    const stopped: string[] = []
+    for (const managed of [parent, child, other]) {
+      managed.agent = { forceAbort: () => stopped.push(managed.id) } as any
+    }
+    await (sm as any).cancelGoalSessionTree(tmpRoot, { ownerSessionId: parent.id }, parent.id)
+    expect(stopped.sort()).toEqual([child.id, parent.id])
+  })
+
   it('resolves `queued` for a busy session and records the message once', async () => {
     const { managed } = idleSession('busy')
     managed.isProcessing = true

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { handleDeepLink } from '../deep-link'
+import { handleDeepLink, parseDeepLink } from '../deep-link'
 import { RPC_CHANNELS } from '../../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import type { WindowManager } from '../window-manager'
@@ -100,5 +100,18 @@ describe('handleDeepLink routing', () => {
 
     expect(sent.length).toBe(1)
     expect(sent[0]?.target).toEqual({ to: 'workspace', workspaceId: 'ws-target' })
+  })
+})
+
+
+describe('fork deep links', () => {
+  it('opens workspace-scoped documents via the registered fork protocol', () => {
+    const route = 'documents/document/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    expect(parseDeepLink(`vetoagents://workspace/ws-target/${route}`, 'vetoagents')).toMatchObject({ workspaceId: 'ws-target', view: route })
+    expect(parseDeepLink(`vetoagents://workspace/ws-target/${route}`, 'craftagents')).toBeNull()
+  })
+
+  it('preserves internal legacy navigation in the fork', () => {
+    expect(parseDeepLink('craftagents://workspace/ws-target/allSessions', 'vetoagents')).toMatchObject({ workspaceId: 'ws-target', view: 'allSessions' })
   })
 })

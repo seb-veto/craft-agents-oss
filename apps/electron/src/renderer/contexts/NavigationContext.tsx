@@ -63,7 +63,7 @@ import type {
   SourceFilter,
   RightSidebarPanel,
   ContentBadge,
-} from '../../shared/types'
+} from '../../shared/navigation-types'
 import {
   isSessionsNavigation,
   isSourcesNavigation,
@@ -72,8 +72,10 @@ import {
   isAutomationsNavigation,
   isProjectsNavigation,
   isPagesNavigation,
+  isGoalsNavigation,
+  isDocumentsNavigation,
   DEFAULT_NAVIGATION_STATE,
-} from '../../shared/types'
+} from '../../shared/navigation-types'
 import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
 import { skillsAtom } from '@/atoms/skills'
@@ -95,7 +97,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, SessionFilter }
-export { isSessionsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isAutomationsNavigation, isProjectsNavigation, isPagesNavigation }
+export { isSessionsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isAutomationsNavigation, isProjectsNavigation, isPagesNavigation, isGoalsNavigation, isDocumentsNavigation }
 
 // =============================================================================
 // Context

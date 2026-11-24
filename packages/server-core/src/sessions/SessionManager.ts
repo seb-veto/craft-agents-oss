@@ -1,3 +1,8 @@
+import { chooseProjectForMessage, loadWorkspaceProjects } from '@craft-agent/shared/projects'
+import { startGoalHost } from '../goals/host-runtime'
+import { getGoalService } from '../goals/service'
+import type { Goal } from '@craft-agent/shared/goals/types'
+
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
 import { CLIENT_BROWSER_INVOKE } from '@craft-agent/server-core/transport'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput, AdmittedMessage, MessageAdmission } from '@craft-agent/server-core/handlers'
@@ -20,7 +25,7 @@ import {
   type BackendHostRuntimeContext,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
-import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
+import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, canSwitchClaudeAccount, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
 import type { MidStreamBehavior } from '@craft-agent/shared/config'
 import { PrivilegedExecutionBroker } from '@craft-agent/server-core/services'
 import { isValidWorkingDirectory } from '../utils/path-validation'
@@ -126,6 +131,7 @@ import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntr
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { validateArchiveTarget } from './archive-guards'
 import { spawnedSessionOptions, spawnRequestError } from './spawn-options'
+import { readRequiredSessionStartMode } from './required-session-start-mode'
 import { runGit } from '../services/git'
 import { addTurnUsage, branchStartTotals, type BranchParent } from './turn-usage'
 
@@ -719,6 +725,9 @@ interface RunningBackgroundTask {
 }
 
 interface ManagedSession {
+  /** Runtime-only tool role; changing it invalidates a warm provider tool catalog. */
+  goalToolRole?: 'owner' | 'verifier'
+
   id: string
   workspace: Workspace
   agent: AgentInstance | null  // Lazy-loaded - null until first message
@@ -795,6 +804,9 @@ interface ManagedSession {
   labels?: string[]
   // Workspace-scoped project binding (undefined = unbound)
   projectId?: string
+  // Manual selections (including No project) remain authoritative across restarts.
+  projectRoutingDisabled?: boolean
+  projectOverride?: true
   // Parent session id — when set, this session is a subtask of the parent (undefined = top-level task)
   parentSessionId?: string
   // Kanban board column id ('todo' | 'in-progress' | 'done'); independent of sessionStatus
@@ -1340,6 +1352,8 @@ export function canSteerTextPayload(
 
 export class SessionManager implements ISessionManager {
   private sessions: Map<string, ManagedSession> = new Map()
+  private stopGoalHost?: () => void
+  private cleanedUp = false
   /** Test seam for HANDOFF_SUMMARY_WAIT_MS. */
   private handoffSummaryWaitMs = HANDOFF_SUMMARY_WAIT_MS
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
@@ -2221,6 +2235,16 @@ export class SessionManager implements ISessionManager {
       changed = true
     }
 
+    if (managed.projectRoutingDisabled !== header.projectRoutingDisabled) {
+      managed.projectRoutingDisabled = header.projectRoutingDisabled
+      changed = true
+    }
+
+    if (managed.projectOverride !== header.projectOverride) {
+      managed.projectOverride = header.projectOverride
+      changed = true
+    }
+
     // Kanban column (mutable via drag; reconcile external/multi-window changes)
     if (managed.kanbanColumn !== header.kanbanColumn) {
       managed.kanbanColumn = header.kanbanColumn
@@ -2506,7 +2530,7 @@ export class SessionManager implements ISessionManager {
     managed.agent.setAllSources(allSources)
 
     // Rebuild MCP and API servers for session's enabled sources
-    const enabledSlugs = managed.enabledSourceSlugs || []
+    const enabledSlugs = managed.goalToolRole ? [] : (managed.enabledSourceSlugs || [])
     const enabledSources = allSources.filter(s =>
       enabledSlugs.includes(s.config.slug) && isSourceUsable(s)
     )
@@ -2666,8 +2690,79 @@ export class SessionManager implements ISessionManager {
       sessionLog.error('Failed to load sessions from disk (async):', error)
     } finally {
       // Idempotent: no-op if initialize() already markFailed'd on a fast-path error.
+      if (!this.cleanedUp) {
+        try { this.initializeGoalHost() }
+        catch { sessionLog.warn('Goals runtime could not start; automatic execution is unavailable.') }
+      }
       this.sessionsGate.markReady()
     }
+  }
+
+  private initializeGoalHost(): void {
+    this.stopGoalHost = startGoalHost({
+      workspaces: getWorkspaces,
+      warn: message => sessionLog.warn(message),
+      create: async (workspace, goal, role) => {
+        const session = await this.createSession(workspace.id, {
+          name: `${role === 'owner' ? 'Goal' : 'Verify'}: ${goal.title}`,
+          permissionMode: 'allow-all',
+          workingDirectory: 'none',
+          enabledSourceSlugs: [],
+          systemPromptPreset: 'default',
+        })
+        return session.id
+      },
+      wake: async (workspace, goal, sessionId, message, signal) => {
+        const initial = this.sessions.get(sessionId)
+        if (!initial || initial.workspace.rootPath !== workspace.rootPath || initial.isArchived) {
+          throw new Error('Goal session is unavailable in this workspace')
+        }
+        const service = getGoalService(workspace.rootPath)
+        const guard = () => {
+          signal.throwIfAborted()
+          const current = service.get(goal.id)
+          const assigned = current?.state === 'active' ? current.ownerSessionId
+            : current?.state === 'verifying' ? current.verifierSessionId : undefined
+          const mode = initial.agent ? getPermissionMode(sessionId) : initial.permissionMode
+          if (this.sessions.get(sessionId) !== initial || assigned !== sessionId || initial.isArchived
+            || mode !== 'allow-all') throw new Error('Goal session or permission mode changed')
+        }
+        guard()
+        const admission = this.admitMessage(sessionId, message, undefined, undefined, { hidden: true }, guard)
+        // Return promptly on abort; the same signal is checked inside the queued admission slot.
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(new Error('Goal wake cancelled'))
+          signal.addEventListener('abort', abort, { once: true })
+          if (signal.aborted) abort()
+          void admission.then(result => {
+            if (result.outcome !== 'started') throw new Error('Goal wakes cannot queue or steer')
+            resolve()
+          }).catch(reject).finally(() => signal.removeEventListener('abort', abort))
+        })
+      },
+      cancel: async (workspace, goal, sessionId) => {
+        await this.cancelGoalSessionTree(workspace.rootPath, goal, sessionId)
+      },
+    })
+  }
+
+  private async cancelGoalSessionTree(root: string, goal: Goal, sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.workspace.rootPath !== root) return
+    // An idle session created while pause raced assignment may not yet have a persisted link.
+    // Ignore unrelated sessions, including a concurrent goal's session.
+    if (sessionId !== goal.ownerSessionId && sessionId !== goal.verifierSessionId && session.isProcessing) return
+    const ids = new Set([sessionId])
+    const children = new Map<string, string[]>()
+    for (const child of this.sessions.values()) {
+      if (child.workspace.rootPath !== root || !child.parentSessionId) continue
+      const siblings = children.get(child.parentSessionId) ?? []
+      siblings.push(child.id)
+      children.set(child.parentSessionId, siblings)
+    }
+    for (const id of ids) for (const child of children.get(id) ?? []) ids.add(child)
+    const results = await Promise.allSettled([...ids].map(id => this.cancelProcessing(id, true, true)))
+    if (results.some(result => result.status === 'rejected')) throw new Error('Goal cancellation could not be confirmed')
   }
 
   /**
@@ -3351,6 +3446,21 @@ export class SessionManager implements ISessionManager {
     return getSessionStoragePath(managed.workspace.rootPath, sessionId)
   }
 
+  private async createSpawnedSession(
+    parent: ManagedSession,
+    request: Parameters<NonNullable<AgentBackend['onSpawnSession']>>[0],
+  ): Promise<Session> {
+    const invalid = await spawnRequestError(request, (dir) => runGit(dir, ['rev-parse', '--show-toplevel']))
+    if (invalid) throw new Error(invalid)
+
+    return this.createSession(parent.workspace.id, {
+      ...spawnedSessionOptions(request, parent),
+      permissionMode: request.permissionMode,
+      // Nobody watches a session an automation, task or CLI run spawns either.
+      unattended: !isAttendedSession(parent) || undefined,
+    }, { spawningSessionId: parent.id })
+  }
+
   async createSession(
     workspaceId: string,
     options?: import('@craft-agent/shared/protocol').CreateSessionOptions,
@@ -3358,7 +3468,8 @@ export class SessionManager implements ISessionManager {
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean },
+    // spawningSessionId is trusted server context from the spawn_session handler.
+    internal?: { emitCreatedEvent?: boolean; spawningSessionId?: string },
   ): Promise<Session> {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
@@ -3366,7 +3477,7 @@ export class SessionManager implements ISessionManager {
     }
 
     // Get new session defaults from workspace config (with global fallback)
-    // Options.permissionMode overrides the workspace default (used by EditPopover for auto-execute)
+    // A required mode overrides ordinary caller options and defaults.
     const workspaceRootPath = workspace.rootPath
     const wsConfig = loadWorkspaceConfig(workspaceRootPath)
     const globalDefaults = loadConfigDefaults()
@@ -3374,13 +3485,11 @@ export class SessionManager implements ISessionManager {
     // Read permission mode from workspace config, fallback to global defaults
     // Callers may pass canonical names (`craft run --mode execute`); an unknown mode would
     // otherwise fall through to Explore's checks, so it is rejected.
-    const requestedPermissionMode = options?.permissionMode ? parsePermissionMode(options.permissionMode) : undefined
+    const requestedPermissionMode = options?.permissionMode ? parsePermissionMode(options.permissionMode) ?? undefined : undefined
     if (options?.permissionMode && !requestedPermissionMode) {
       throw new Error(`Invalid permission mode: ${String(options.permissionMode)}. Valid values: explore, ask, guarded, execute`)
     }
-    const defaultPermissionMode = requestedPermissionMode
-      ?? wsConfig?.defaults?.permissionMode
-      ?? globalDefaults.workspaceDefaults.permissionMode
+    const requiredPermissionMode = readRequiredSessionStartMode(wsConfig)
 
     const userDefaultWorkingDir = wsConfig?.defaults?.workingDirectory || undefined
     // Resolve thinking level with caller-first precedence, matching permissionMode above:
@@ -3662,6 +3771,17 @@ export class SessionManager implements ISessionManager {
       })
     }
 
+    // Only agent-initiated spawns have a parent permission ceiling. A required mode
+    // must not let a restricted parent obtain more permissions by spawning a child.
+    const parentMode = internal?.spawningSessionId ? getPermissionMode(internal.spawningSessionId) : undefined
+    if (requiredPermissionMode && parentMode && clampPermissionMode(requiredPermissionMode, parentMode) !== requiredPermissionMode) {
+      throw new Error('Cannot spawn session: the workspace requires a startup permission mode looser than the parent session’s current mode.')
+    }
+    const defaultPermissionMode = requiredPermissionMode
+      ?? (parentMode ? clampPermissionMode(requestedPermissionMode, parentMode) : requestedPermissionMode)
+      ?? wsConfig?.defaults?.permissionMode
+      ?? globalDefaults.workspaceDefaults.permissionMode
+
     // Use storage layer to create and persist the session
     const storedSession = await createStoredSession(workspaceRootPath, {
       name: options?.name,
@@ -3673,6 +3793,8 @@ export class SessionManager implements ISessionManager {
       labels: this.canonicalLabels(workspaceRootPath, options?.labels),
       isFlagged: options?.isFlagged,
       projectId: resolvedProjectId,
+      projectOverride: options?.parentSessionId && options.projectId && resolvedProjectId !== inheritedProjectId
+        ? true : undefined,
       parentSessionId: options?.parentSessionId,
       taskSlug: options?.taskSlug,
       taskRunId: options?.taskRunId,
@@ -4176,8 +4298,8 @@ export class SessionManager implements ISessionManager {
       // ============================================================
 
       const sessionPath = getSessionStoragePath(managed.workspace.rootPath, managed.id)
-      const enabledSlugs = managed.enabledSourceSlugs || []
-      const allSources = loadAllSources(managed.workspace.rootPath)
+      const enabledSlugs = managed.goalToolRole ? [] : (managed.enabledSourceSlugs || [])
+      const allSources = managed.goalToolRole ? [] : loadAllSources(managed.workspace.rootPath)
       const enabledSources = allSources.filter(s =>
         enabledSlugs.includes(s.config.slug) && isSourceUsable(s)
       )
@@ -5064,24 +5186,7 @@ export class SessionManager implements ISessionManager {
       managed.agent.onSpawnSession = async (request) => {
         sessionLog.info(`Spawn session request from session ${managed.id}:`, request.name || '(unnamed)')
 
-        // The model picks the child's mode; it may be as strict as it likes but never looser
-        // than this session's effective mode, or an Ask session could spawn an Execute child
-        // without a prompt.
-        const parentMode = getPermissionMode(managed.id)
-        const permissionMode = clampPermissionMode(request.permissionMode, parentMode)
-        if (request.permissionMode && permissionMode !== request.permissionMode) {
-          sessionLog.warn(`Spawn session: lowered requested mode ${request.permissionMode} to ${permissionMode} (parent ${managed.id} runs in ${parentMode})`)
-        }
-
-        const invalid = await spawnRequestError(request, (dir) => runGit(dir, ['rev-parse', '--show-toplevel']))
-        if (invalid) throw new Error(invalid)
-
-        const session = await this.createSession(managed.workspace.id, {
-          ...spawnedSessionOptions(request, managed),
-          permissionMode,
-          // Nobody watches a session an automation, task or CLI run spawns either.
-          unattended: !isAttendedSession(managed) || undefined,
-        })
+        const session = await this.createSpawnedSession(managed, request)
 
         // Build FileAttachment[] from paths (if any)
         let fileAttachments: FileAttachment[] | undefined
@@ -5616,45 +5721,54 @@ export class SessionManager implements ISessionManager {
     }
   }
 
-  /**
-   * Set the LLM connection for a session.
-   * Can only be changed before the first message is sent (connection is locked after).
-   * This determines which LLM provider/backend will be used for this session.
-   */
-  async setSessionConnection(sessionId: string, connectionSlug: string): Promise<void> {
-    const managed = this.sessions.get(sessionId)
-    if (!managed) {
-      sessionLog.warn(`setSessionConnection: session ${sessionId} not found`)
-      throw new Error(`Session ${sessionId} not found`)
-    }
+  /** Change the connection before the first turn, or explicitly switch Claude OAuth accounts. */
+  async setSessionConnection(sessionId: string, connectionSlug: string, switchAccount = false): Promise<void> {
+    // Serialize with sends so a turn cannot start on the old account during selection.
+    await this.sendInSlot(this.reserveAdmission(sessionId), async () => {
+      const managed = this.sessions.get(sessionId)
+      if (!managed) throw new Error(`Session ${sessionId} not found`)
+      await this.ensureMessagesLoaded(managed)
 
-    // Only allow changing connection before first message (session hasn't started)
-    if (managed.messages && managed.messages.length > 0) {
-      sessionLog.warn(`setSessionConnection: cannot change connection after session has started (${sessionId})`)
-      throw new Error('Cannot change connection after session has started')
-    }
+      const connection = getLlmConnection(connectionSlug)
+      if (!connection) throw new Error(`LLM connection "${connectionSlug}" not found`)
 
-    // Validate connection exists
-    const { getLlmConnection } = await import('@craft-agent/shared/config/storage')
-    const connection = getLlmConnection(connectionSlug)
-    if (!connection) {
-      sessionLog.warn(`setSessionConnection: connection "${connectionSlug}" not found`)
-      throw new Error(`LLM connection "${connectionSlug}" not found`)
-    }
+      const previousModel = managed.model
+      if (switchAccount) {
+        if (managed.llmConnection === connectionSlug) return
+        const currentConnection = managed.llmConnection ? getLlmConnection(managed.llmConnection) : null
+        const currentModel = managed.model ?? currentConnection?.defaultModel ?? ''
+        if (!canSwitchClaudeAccount(currentConnection, connection, currentModel)) {
+          throw new Error('This account cannot use the current chat model')
+        }
+        // Require a credential belonging to the selected slug; never use the legacy shared slot.
+        const credential = await getCredentialManager().getLlmOAuth(connectionSlug)
+        if (!credential?.accessToken) throw new Error('The selected account is not signed in')
+        if (managed.isProcessing || managed.agent?.isProcessing() || managed.isAsyncOperationOngoing
+          || managed.messageQueue.length || managed.pendingQueueReplays
+          || managed.autoRetryTimer || managed.pendingActivationResend || managed.pendingHandoffSummary
+          || (this.keepBackgroundTasksAlive && [...managed.backgroundTaskRegistry.values()].some(task => task.status === 'running'))) {
+          throw new Error('Wait for the current chat work to finish before switching accounts')
+        }
+        // The next getOrCreateAgent notices the changed slug in the restart signature and
+        // rebuilds with the selected credential. Keep the SDK session ID and stored messages.
+        managed.model = currentModel
+      } else if (managed.messages.length > 0 || hasConversationStarted(managed) || managed.connectionLocked || managed.isProcessing) {
+        throw new Error('Cannot change connection after session has started')
+      }
 
-    managed.llmConnection = connectionSlug
-    // Persist in-memory state directly to avoid race with pending queue writes
-    this.persistSession(managed)
-    await this.flushSession(managed.id)
-    sessionLog.info(`Set LLM connection for session ${sessionId} to ${connectionSlug}`)
-
-    // Notify UI that connection changed (triggers capabilities refresh)
-    this.sendEvent({
-      type: 'connection_changed',
-      sessionId,
-      connectionSlug,
-      supportsBranching: resolveSupportsBranching(managed),
-    }, managed.workspace.id)
+      managed.llmConnection = connectionSlug
+      this.persistSession(managed)
+      await this.flushSession(managed.id)
+      if (managed.model !== previousModel) {
+        this.sendEvent({ type: 'session_model_changed', sessionId, model: managed.model ?? null }, managed.workspace.id)
+      }
+      this.sendEvent({
+        type: 'connection_changed',
+        sessionId,
+        connectionSlug,
+        supportsBranching: resolveSupportsBranching(managed),
+      }, managed.workspace.id)
+    })
   }
 
   // ============================================
@@ -6004,7 +6118,7 @@ export class SessionManager implements ISessionManager {
     managed.enabledSourceSlugs = sourceSlugs
 
     // If agent exists, build and apply servers immediately
-    if (managed.agent) {
+    if (managed.agent && !managed.goalToolRole) {
       const sources = getSourcesBySlugs(workspaceRootPath, sourceSlugs)
       // Pass session path so large API responses can be saved to session folder
       const sessionPath = getSessionStoragePath(workspaceRootPath, sessionId)
@@ -6741,7 +6855,7 @@ export class SessionManager implements ISessionManager {
      * that should host this session's browser tools. Pass undefined when calling
      * directly (tests, intra-server flows) to leave the existing pin in place.
      */
-    rpcContext?: { callerClientId?: string },
+    rpcContext?: { callerClientId?: string; beforeGoalAdmission?: () => void },
   ): Promise<void> {
     await this.sendInSlot(this.reserveAdmission(sessionId), endAdmission =>
       this.sendAdmittedMessage(endAdmission, sessionId, message, attachments, storedAttachments, options, existingMessageId, _isAuthRetry, onAck, rpcContext))
@@ -6758,6 +6872,7 @@ export class SessionManager implements ISessionManager {
     attachments?: FileAttachment[],
     storedAttachments?: StoredAttachment[],
     options?: SendMessageOptions,
+    beforeGoalAdmission?: () => void,
   ): Promise<AdmittedMessage> {
     return new Promise<AdmittedMessage>((resolve, reject) => {
       let admitted: { outcome: MessageAdmission; generation: number } | undefined
@@ -6766,7 +6881,7 @@ export class SessionManager implements ISessionManager {
         admitted = { outcome, generation: this.sessions.get(sessionId)?.processingGeneration ?? -1 }
         resolve({ messageId, outcome })
       }
-      this.sendMessage(sessionId, message, attachments, storedAttachments, options, undefined, undefined, onAck)
+      this.sendMessage(sessionId, message, attachments, storedAttachments, options, undefined, undefined, onAck, { beforeGoalAdmission })
         .then(() => {
           // e.g. a duplicate source-activation retry, dropped before it created a message
           if (!admitted) reject(new Error(`Message to session ${sessionId} was not admitted`))
@@ -6834,7 +6949,24 @@ export class SessionManager implements ISessionManager {
   private async setUpTurnAgent(managed: ManagedSession, sendSpan: ReturnType<typeof perf.span>): Promise<AgentInstance> {
     const sessionId = managed.id
     const workspaceRootPath = managed.workspace.rootPath
-    const enabledSlugs = managed.enabledSourceSlugs ?? []
+    // Resolve from persisted assignments before each turn, including a previously warm session
+    // later selected by the human. Never take the role from options or a model tool call.
+    const service = getGoalService(workspaceRootPath)
+    let goalRole: ManagedSession['goalToolRole']
+    let goalReadFolders: string[] | undefined
+    try {
+      const goals = service.list().filter(goal => goal.ownerSessionId === sessionId || goal.verifierSessionId === sessionId)
+      if (goals.length) goalReadFolders = goals.map(goal => goal.folderPath)
+      goalRole = goals.some(goal => goal.state === 'verifying' && goal.verifierSessionId === sessionId) ? 'verifier'
+        : goals.some(goal => goal.ownerSessionId === sessionId) ? 'owner'
+        : goals.some(goal => goal.verifierSessionId === sessionId) ? 'verifier' : undefined
+    } catch {
+      if (managed.goalToolRole) throw new Error('The assigned Goal could not be loaded')
+      sessionLog.warn('Goals tools are disabled for this turn because the workspace store could not be read.')
+    }
+    if (managed.agent && managed.goalToolRole !== goalRole) await this.disposeManagedAgentRuntime(managed, 'Goal tool scope changed')
+    managed.goalToolRole = goalRole
+    const enabledSlugs = goalRole ? [] : (managed.enabledSourceSlugs ?? [])
     const hasSources = enabledSlugs.length > 0
 
     // Load enabled sources up-front so we can refresh tokens BEFORE getOrCreateAgent
@@ -6859,10 +6991,16 @@ export class SessionManager implements ISessionManager {
     // ~L2956 now sees fresh tokens (or correctly-needs_auth failed sources, since
     // ensureFreshToken mirrors the disk write to source.config in-memory).
     const agent = await this.getOrCreateAgent(managed)
+    mergeSessionScopedToolCallbacks(sessionId, {
+      goals: goalRole ? service.forSession(sessionId) : undefined,
+      goalRole,
+      // Keep assigned Goal roles isolated even when a human opens the session manually.
+      goalReadFolders,
+    })
     sendSpan.mark('agent.ready')
 
     // Always set all sources for context (even if none are enabled), including built-ins
-    const allSources = loadAllSources(workspaceRootPath)
+    const allSources = goalRole ? [] : loadAllSources(workspaceRootPath)
     agent.setAllSources(allSources)
     sendSpan.mark('sources.loaded')
 
@@ -6903,12 +7041,13 @@ export class SessionManager implements ISessionManager {
     existingMessageId?: string,
     _isAuthRetry?: boolean,
     onAck?: (messageId: string, outcome: MessageAdmission) => void,
-    rpcContext?: { callerClientId?: string },
+    rpcContext?: { callerClientId?: string; beforeGoalAdmission?: () => void },
   ): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    rpcContext?.beforeGoalAdmission?.()
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
 
     // Source-activation auto-retry dedup (craft-agents-oss#804). When the server
@@ -6941,6 +7080,19 @@ export class SessionManager implements ISessionManager {
 
     // Ensure messages are loaded before we try to add new ones
     await this.ensureMessagesLoaded(managed)
+
+    if (rpcContext?.beforeGoalAdmission) {
+      rpcContext.beforeGoalAdmission()
+      if (managed.isProcessing || managed.pendingQueueReplays || managed.messageQueue.length) {
+        throw new Error('Goal wake skipped: this session is busy')
+      }
+    }
+
+    // Categorize before the first user message is persisted and before agent construction,
+    // so project context is available on its first turn. Never move an existing conversation.
+    if (!options?.hidden && !existingMessageId && !_isAuthRetry && !activationResend) {
+      this.autoRouteNewSession(managed, message)
+    }
 
     // If currently processing, behavior depends on the connection's
     // `midStreamBehavior` (resolved via {@link resolveMidStreamBehavior},
@@ -7146,6 +7298,7 @@ export class SessionManager implements ISessionManager {
       }
     }
 
+    rpcContext?.beforeGoalAdmission?.()
     managed.lastMessageAt = Date.now()
     this.setProcessing(managed, true)
     managed.streamingText = ''
@@ -7188,7 +7341,7 @@ export class SessionManager implements ISessionManager {
     // Pre-enable sources required by invoked skills (Issue #249)
     // This eliminates the two-turn penalty where the agent discovers missing sources at runtime.
     // Uses targeted loadSkillBySlug() instead of loadAllSkills() to avoid O(N) filesystem scans.
-    if (options?.skillSlugs?.length) {
+    if (!rpcContext?.beforeGoalAdmission && options?.skillSlugs?.length) {
       try {
         const workspaceRoot = managed.workspace.rootPath
 
@@ -7258,7 +7411,7 @@ export class SessionManager implements ISessionManager {
 
       sessionLog.info('Starting chat for session:', sessionId)
       sessionLog.info('Workspace:', JSON.stringify(managed.workspace, null, 2))
-      sessionLog.info('Message:', message)
+      if (!rpcContext?.beforeGoalAdmission) sessionLog.info('Message:', message)
       sessionLog.info('Agent model:', agent.getModel())
       sessionLog.info('process.cwd():', process.cwd())
 
@@ -7322,6 +7475,7 @@ export class SessionManager implements ISessionManager {
         if (!superseded) this.onProcessingStopped(sessionId, 'interrupted')
         return
       }
+      rpcContext?.beforeGoalAdmission?.()
       if (suggestionHint) turnContext.push(suggestionHint)
       // A /compact turn takes no context: text around it would become compaction instructions (a
       // task's spec then goes with the next turn).
@@ -7542,8 +7696,14 @@ export class SessionManager implements ISessionManager {
     }
   }
 
-  async cancelProcessing(sessionId: string, silent = false): Promise<void> {
+  async cancelProcessing(sessionId: string, silent = false, hard = false): Promise<void> {
     const managed = this.sessions.get(sessionId)
+    if (managed && hard) {
+      if (managed.autoRetryTimer) clearTimeout(managed.autoRetryTimer)
+      managed.autoRetryTimer = undefined
+      managed.pendingActivationResend = undefined
+      if (!managed.isProcessing) managed.agent?.forceAbort(AbortReason.UserStop)
+    }
     if (!managed?.isProcessing) {
       return // Not processing, nothing to cancel
     }
@@ -7584,7 +7744,7 @@ export class SessionManager implements ISessionManager {
 
     // Stop the turn, keeping background agents alive where the backend can (Claude keep-alive);
     // otherwise hard-abort.
-    if (managed.agent && !managed.agent.stopTurn?.()) {
+    if (managed.agent && (hard || !managed.agent.stopTurn?.())) {
       managed.agent.forceAbort(AbortReason.UserStop)
     }
 
@@ -7639,7 +7799,7 @@ export class SessionManager implements ISessionManager {
     workspaceId: string,
     failureErrorCode?: string,
   ): boolean {
-    if (managed.authRetryAttempted || !managed.lastSentMessage) return false
+    if (managed.goalToolRole || managed.authRetryAttempted || !managed.lastSentMessage) return false
 
     sessionLog.info(`Auth error detected, attempting token refresh and retry for session ${sessionId}`)
     managed.authRetryAttempted = true
@@ -8534,28 +8694,94 @@ export class SessionManager implements ISessionManager {
     return { labelId: itemId }
   }
 
-  /**
-   * Bind or unbind a session to/from a workspace project.
-   * Pass `null` to unbind. The session's working directory is NOT changed retroactively —
-   * the project binding is only used as a default for newly created sessions.
-   */
-  async setSessionProjectId(sessionId: string, projectId: string | null): Promise<void> {
-    const managed = this.sessions.get(sessionId)
-    if (managed) {
-      managed.projectId = projectId ?? undefined
+  /** One-shot, local categorization only. Never changes execution settings or live agents. */
+  private autoRouteNewSession(managed: ManagedSession, message: string): void {
+    if (managed.projectId || managed.projectRoutingDisabled || managed.isProcessing || managed.agent
+      || managed.hidden || managed.isArchived || managed.systemPromptPreset === 'mini'
+      || managed.parentSessionId || managed.branchFromMessageId || managed.taskSlug
+      || managed.triggeredBy || managed.unattended || managed.sdkSessionId
+      || message.trim().startsWith('/')
+      || managed.messages.some(entry => entry.role === 'user' && !entry.hidden)) return
+
+    try {
+      const projectId = chooseProjectForMessage(message,
+        loadWorkspaceProjects(managed.workspace.rootPath).map(project => project.config))
+      if (!projectId) return
+      managed.projectId = projectId
       this.setMetadataWriteGuard(managed)
-
-      this.sendEvent({
-        type: 'project_id_changed',
-        sessionId: managed.id,
-        projectId: managed.projectId ?? null,
-      }, managed.workspace.id)
-
-      this.persistSession(managed)
-      await this.flushSession(managed.id)
-      const watcher = this.configWatchers.get(managed.workspace.rootPath)
-      watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
+      // Uses the same event the project menu already renders. The enclosing message admission
+      // persists+flushes the binding with the message before acknowledging it to the client.
+      this.sendEvent({ type: 'project_id_changed', sessionId: managed.id, projectId }, managed.workspace.id)
+    } catch (error) {
+      // Project discovery must never stop the user's message. Don't log private message text.
+      sessionLog.warn(`Could not auto-route session ${managed.id}:`, error)
     }
+  }
+
+  /**
+   * Update the selected chats and any descendants that follow them. `null` unbinds them.
+   * Project moves do not change existing sessions' working directories.
+   */
+  async setSessionProjectId(sessionId: string, projectId: string | null, additionalSessionIds: string[] = []): Promise<void> {
+    const root = this.sessions.get(sessionId)
+    if (!root) return
+
+    const { workspace } = root
+    const destination = projectId ?? undefined
+    const children = new Map<string, ManagedSession[]>()
+    for (const session of this.sessions.values()) {
+      if (session.workspace.id !== workspace.id || !session.parentSessionId) continue
+      const siblings = children.get(session.parentSessionId)
+      if (siblings) siblings.push(session)
+      else children.set(session.parentSessionId, [session])
+    }
+
+    const selected = new Set([sessionId, ...additionalSessionIds])
+    const affected = new Map<string, ManagedSession>()
+    for (const id of selected) {
+      const session = this.sessions.get(id)
+      if (!session || session.workspace.id !== workspace.id) continue
+      const pending = [session]
+      while (pending.length > 0) {
+        const parent = pending.pop()!
+        if (affected.has(parent.id)) continue
+        affected.set(parent.id, parent)
+        for (const child of children.get(parent.id) ?? []) {
+          // Selected descendants start their own cascade, regardless of the ancestor's old project.
+          if (selected.has(child.id) || child.projectOverride) continue
+          // The older fork used this flag for explicit “No project” choices.
+          if (!child.projectId && child.projectRoutingDisabled) continue
+          // Older headers did not record intent. Treat a different existing project
+          // as an override, but let unassigned legacy children join the family.
+          if (child.projectId && child.projectId !== parent.projectId && child.projectId !== session.projectId) continue
+          pending.push(child)
+        }
+      }
+    }
+
+    const changed: ManagedSession[] = []
+    for (const session of affected.values()) {
+      const parent = session.parentSessionId ? this.sessions.get(session.parentSessionId) : undefined
+      const projectOverride = parent?.workspace.id === workspace.id &&
+        !affected.has(parent.id) && parent.projectId !== destination ? true : undefined
+      if (!selected.has(session.id) && session.projectId === destination) continue
+      session.projectId = destination
+      session.projectOverride = projectOverride
+      // Children never auto-route. Their own project override is now tracked
+      // separately, so an inherited clear must not look like a legacy manual one.
+      if (session.parentSessionId) session.projectRoutingDisabled = undefined
+      else if (selected.has(session.id)) session.projectRoutingDisabled = true
+      this.setMetadataWriteGuard(session)
+      this.persistSession(session)
+      changed.push(session)
+      this.sendEvent({ type: 'project_id_changed', sessionId: session.id, projectId }, workspace.id)
+    }
+
+    const watcher = this.configWatchers.get(workspace.rootPath)
+    await Promise.all(changed.map(async session => {
+      await this.flushSession(session.id)
+      watcher?.notifyFileChange(`sessions/${session.id}/session.jsonl`)
+    }))
   }
 
   /**
@@ -9064,7 +9290,10 @@ export class SessionManager implements ISessionManager {
         this.sendEvent({ type: 'title_generated', sessionId: managed.id, title }, managed.workspace.id)
         sessionLog.info(`Generated title for session ${managed.id}: "${title}"`)
       } else {
-        sessionLog.warn(`Title generation returned null for session ${managed.id}`)
+        // No usable title (e.g. "Can you take this on?" names no task): keep the first-message
+        // title and name the chat from the next message instead, as for small talk.
+        if (managed.name === managed.autoTitle) managed.titleDeferred = true
+        sessionLog.warn(`Title generation returned null for session ${managed.id}; titling the next message instead`)
       }
     } catch (error) {
       sessionLog.error(`Failed to generate title for session ${managed.id}:`, error)
@@ -10542,6 +10771,8 @@ export class SessionManager implements ISessionManager {
     const warnings: string[] = []
     const workspaceRootPath = workspace.rootPath
 
+    const requiredPermissionMode = readRequiredSessionStartMode(loadWorkspaceConfig(workspaceRootPath))
+
     // Determine session ID
     const sessionId = mode === 'move'
       ? bundle.session.header.id
@@ -10570,8 +10801,8 @@ export class SessionManager implements ISessionManager {
       lastUsedAt: Date.now(),
       lastMessageAt: header.lastMessageAt,
       isFlagged: header.isFlagged,
-      permissionMode: header.permissionMode,
-      previousPermissionMode: header.previousPermissionMode,
+      permissionMode: requiredPermissionMode ?? header.permissionMode,
+      previousPermissionMode: requiredPermissionMode ? undefined : header.previousPermissionMode,
       sessionStatus: header.sessionStatus,
       labels: this.canonicalLabels(workspaceRootPath, header.labels),
       enabledSourceSlugs: header.enabledSourceSlugs,
@@ -10726,6 +10957,9 @@ export class SessionManager implements ISessionManager {
    */
   cleanup(): void {
     sessionLog.info('Cleaning up resources...')
+    this.cleanedUp = true
+    this.stopGoalHost?.()
+    this.stopGoalHost = undefined
 
     // Stop all ConfigWatchers (file system watchers)
     for (const [path, watcher] of this.configWatchers) {

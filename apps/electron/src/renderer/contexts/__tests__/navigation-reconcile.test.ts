@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { normalizePanelRouteForReconcile } from '../navigation-reconcile'
-import type { NavigationState } from '../../../shared/types'
+import type { NavigationState } from '../../../shared/navigation-types'
 
 describe('normalizePanelRouteForReconcile', () => {
   it('auto-selects session details for filter-only session routes', () => {

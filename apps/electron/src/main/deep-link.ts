@@ -92,11 +92,13 @@ function parseRightSidebar(parsed: URL): string | undefined {
 /**
  * Parse a deep link URL into structured target
  */
-export function parseDeepLink(url: string): DeepLinkTarget | null {
+export function parseDeepLink(url: string, scheme = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagents'): DeepLinkTarget | null {
   try {
     const parsed = new URL(url)
 
-    if (parsed.protocol !== 'craftagents:') {
+    // The legacy scheme remains valid for internal renderer navigation. The OS
+    // entry point separately requires this build’s registered scheme.
+    if (parsed.protocol !== 'craftagents:' && parsed.protocol !== `${scheme}:`) {
       return null
     }
 
@@ -115,7 +117,7 @@ export function parseDeepLink(url: string): DeepLinkTarget | null {
 
     // Compound route prefixes
     const COMPOUND_ROUTE_PREFIXES = [
-      'allSessions', 'flagged', 'state', 'sources', 'settings', 'skills'
+      'allSessions', 'flagged', 'state', 'sources', 'settings', 'skills', 'goals', 'documents', 'inbox', 'reviews'
     ]
 
     // craftagents://allSessions/..., craftagents://settings/..., etc. (compound routes)

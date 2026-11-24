@@ -61,7 +61,8 @@ import { setupI18n, i18n, SUPPORTED_LANGUAGE_CODES, type LanguageCode } from '@c
 import { getPersistedUiLanguage, setPersistedUiLanguage } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { registerDefaultZoomIpc } from './zoom'
-setupI18n()
+// Forks set CRAFT_APP_NAME before main loads (fork-bootstrap.cjs); strip dev multi-instance suffixes.
+setupI18n([], { productName: process.env.CRAFT_APP_NAME?.replace(/\s*\[\d+\]$/, '') })
 const persistedUiLanguage = getPersistedUiLanguage()
 if (persistedUiLanguage) {
   void i18n.changeLanguage(persistedUiLanguage)
@@ -225,7 +226,9 @@ app.setName(process.env.CRAFT_APP_NAME || 'Craft Agents')
 
 // Register as default protocol client for craftagents:// URLs
 // This must be done before app.whenReady() on some platforms
-if (process.defaultApp) {
+if (process.env.CRAFT_SKIP_PROTOCOL_REGISTRATION === '1') {
+  // Disposable app smoke tests must not modify OS URL-handler preferences.
+} else if (process.defaultApp) {
   // Development mode: need to pass the app path
   if (process.argv.length >= 2) {
     app.setAsDefaultProtocolClient(DEEPLINK_SCHEME, process.execPath, [process.argv[1]])
@@ -283,6 +286,7 @@ registerThumbnailScheme()
 // Handle deeplink on macOS (when app is already running)
 app.on('open-url', (event, url) => {
   event.preventDefault()
+  if (!url.startsWith(`${DEEPLINK_SCHEME}://`)) return
   mainLog.info('Received deeplink:', url)
 
   if (windowManager) {

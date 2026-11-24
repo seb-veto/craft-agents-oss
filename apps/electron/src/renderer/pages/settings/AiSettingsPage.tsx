@@ -1,3 +1,4 @@
+import { selectableModelOptions } from '@/lib/model-options'
 /**
  * AiSettingsPage
  *
@@ -102,7 +103,7 @@ function getModelOptionsForConnection(
 
   // If connection has explicit models, use those
   if (connection.models && connection.models.length > 0) {
-    return connection.models.map((m) => {
+    return selectableModelOptions(connection.models).map((m) => {
       if (typeof m === 'string') {
         return { value: m, label: getModelShortName(m), description: '' }
       }
@@ -114,7 +115,7 @@ function getModelOptionsForConnection(
 
   // Fall back to registry models for this provider type
   const registryModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
-  return registryModels.map((m) => ({
+  return selectableModelOptions(registryModels).map((m) => ({
     value: m.id,
     label: m.name,
     description: m.description,

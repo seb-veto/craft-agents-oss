@@ -7,6 +7,7 @@ import {
   validateTitle,
   buildTitlePrompt,
   buildRegenerateTitlePrompt,
+  NO_TITLE_SENTINEL,
 } from '../title-generator.ts';
 
 // ---------------------------------------------------------------------------
@@ -311,6 +312,31 @@ describe('validateTitle', () => {
   test('handles "Title: \\"Foo Bar\\"" combo', () => {
     expect(validateTitle('Title: "Foo Bar"')).toBe('Foo Bar');
   });
+  // --- No task to name ---
+
+  test('treats the NONE sentinel as no title', () => {
+    expect(validateTitle(NO_TITLE_SENTINEL)).toBeNull();
+    expect(validateTitle('none.')).toBeNull();
+    expect(validateTitle('"NONE"')).toBeNull();
+    expect(validateTitle('Title: NONE')).toBeNull();
+  });
+
+  test('rejects titles that describe a missing task', () => {
+    expect(validateTitle('Ambiguous request: "')).toBeNull();
+    expect(validateTitle('Unclear Topic')).toBeNull();
+    expect(validateTitle('Vague request; no topic yet')).toBeNull();
+    expect(validateTitle('Unclear User Request')).toBeNull();
+    expect(validateTitle('No Topic')).toBeNull();
+    expect(validateTitle('Untitled')).toBeNull();
+  });
+
+  test('keeps real task names that share those words', () => {
+    expect(validateTitle('Unknown Error In Message Queue')).toBe('Unknown Error In Message Queue');
+    expect(validateTitle('Fix Unclear Error Messages')).toBe('Fix Unclear Error Messages');
+    expect(validateTitle('Node Upgrade')).toBe('Node Upgrade');
+    expect(validateTitle('Ship Palomar v0.01.01')).toBe('Ship Palomar v0.01.01');
+    expect(validateTitle('Resource the insight factory')).toBe('Resource the insight factory');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -339,10 +365,26 @@ describe('buildTitlePrompt', () => {
     expect(prompt).not.toContain('Ignore');
   });
 
+  test('asks for short task names in the reference style', () => {
+    const prompt = buildTitlePrompt('Ship the designer');
+    expect(prompt).toContain('Name the task this chat is for');
+    expect(prompt).toContain('"Ship Designer"');
+    expect(prompt).toContain('"Codex Health Check"');
+    expect(prompt).toContain('"Ship Palomar v0.01.01"');
+    expect(prompt).not.toContain('What topic or area');
+    expect(prompt).not.toContain('Auto Title Generation');
+    expect(prompt.trimEnd().endsWith('Title:')).toBe(true);
+  });
+
+  test('tells the model to answer NONE when no task is named', () => {
+    expect(buildTitlePrompt('Can you take this on?')).toContain(`reply with exactly ${NO_TITLE_SENTINEL}`);
+  });
+
   test('truncates long messages', () => {
     const longMsg = 'word '.repeat(200);
     const prompt = buildTitlePrompt(longMsg);
-    expect(prompt.length).toBeLessThan(longMsg.length);
+    const userLine = prompt.split('\n').find((line) => line.startsWith('User: '))!;
+    expect(userLine.length).toBeLessThanOrEqual('User: '.length + 500);
   });
 });
 
@@ -373,6 +415,14 @@ describe('buildRegenerateTitlePrompt', () => {
   test('includes language instruction when provided', () => {
     const prompt = buildRegenerateTitlePrompt(['msg'], 'resp', { language: 'German' });
     expect(prompt).toContain('Reply in German.');
+  });
+
+  test('uses the same task-name style as the initial prompt', () => {
+    const prompt = buildRegenerateTitlePrompt(['Ship the designer'], 'resp');
+    expect(prompt).toContain('Name the lasting goal, not the latest step');
+    expect(prompt).toContain('"Software Factory"');
+    expect(prompt).toContain(`reply with exactly ${NO_TITLE_SENTINEL}`);
+    expect(prompt).not.toContain('what is this conversation about');
   });
 
   test('includes assistant response snippet', () => {

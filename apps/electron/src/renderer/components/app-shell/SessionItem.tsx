@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next"
-import { AlertCircle, ChevronRight, CodeXml, Flag, Hand } from "lucide-react"
+import { AlertCircle, ChevronRight, CodeXml, Flag, GripVertical, Hand } from "lucide-react"
 import { useActionLabel } from "@/actions"
 import { cn } from "@/lib/utils"
 import { rendererPerf } from "@/lib/perf"
@@ -9,6 +9,8 @@ import { EntityListBadge } from "@/components/ui/entity-list-badge"
 import { SessionMenu } from "./SessionMenu"
 import { BatchSessionMenu } from "./BatchSessionMenu"
 import { CompactSessionMenu } from "./CompactSessionMenu"
+import { getSessionAttention } from "@/utils/session-attention"
+import { SessionAttentionIndicator } from "./SessionAttentionIndicator"
 import { SessionStatusIcon } from "./SessionStatusIcon"
 import { SessionBadges, chipButtonProps } from "./SessionBadges"
 import { SessionProjectColorWrapper } from "./SessionProjectColorWrapper"
@@ -50,6 +52,10 @@ export interface SessionItemProps {
   onRangeSelect?: () => void
   /** Nesting level under the session's list parent (0 = top level) */
   depth?: number
+  onMoveUp?: () => void
+  onMoveDown?: () => void
+  onReorderDragStart?: React.DragEventHandler<HTMLSpanElement>
+  onReorderDragEnd?: React.DragEventHandler<HTMLSpanElement>
   /** Tree lines of the levels above the row (see `EntityRow`) */
   guides?: readonly TreeGuide[]
   /** Label entries the row's parent shows too (a task's family shares its label), left out here */
@@ -77,6 +83,10 @@ export function SessionItem({
   onToggleSelect,
   onRangeSelect,
   depth = 0,
+  onMoveUp,
+  onMoveDown,
+  onReorderDragStart,
+  onReorderDragEnd,
   guides,
   inheritedLabels,
   subSessions,
@@ -101,6 +111,7 @@ export function SessionItem({
   }))
   const hasPendingPrompt = ctx.hasPendingPrompt?.(item.id) ?? false
   const isUnread = hasUnreadMeta(item)
+  const attention = getSessionAttention({ ...item, hasUnread: isUnread }, hasPendingPrompt)
   const messagingBindingsBySession = useAtomValue(messagingBindingsBySessionAtom)
   const sessionBindings = messagingBindingsBySession.get(item.id) ?? []
   const hasMessagingBinding = sessionBindings.length > 0
@@ -115,6 +126,15 @@ export function SessionItem({
         : item.lastMessageRole === 'plan'
           ? 'plan'
           : null
+  const pinIndex = ctx.pinnedIds?.indexOf(item.id) ?? -1
+  const pinControls = ctx.onPin && ctx.onUnpin ? {
+    pinned: pinIndex >= 0,
+    onPin: () => ctx.onPin!(item.id),
+    onUnpin: () => ctx.onUnpin!(item.id),
+    onMoveUp: pinIndex > 0 ? () => ctx.onMovePin?.(item.id, ctx.pinnedIds![pinIndex - 1]) : undefined,
+    onMoveDown: pinIndex >= 0 && pinIndex < (ctx.pinnedIds?.length ?? 0) - 1
+      ? () => ctx.onMovePin?.(item.id, ctx.pinnedIds![pinIndex + 2]) : undefined,
+  } : undefined
   const needsAttention = runState === 'needs-you' || runState === 'failed'
   // One line, one subject: run state, else labels (full width), else the preview. Squeezing the preview
   // and the chips into one line truncated both into fragments ("Run `gh issu…" · "Schedul…"). A nested
@@ -248,9 +268,12 @@ export function SessionItem({
       menuContent={
         <SessionMenu
           item={item}
+          pinControls={pinControls}
           sessionStatuses={ctx.sessionStatuses}
           labels={ctx.labels}
           onLabelsChange={ctx.onLabelsChange ? (ls) => ctx.onLabelsChange!(item.id, ls) : undefined}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
           onRename={() => ctx.onRenameClick(item.id, title)}
           onFlag={() => ctx.onFlag?.(item.id)}
           onUnflag={() => ctx.onUnflag?.(item.id)}
@@ -275,10 +298,13 @@ export function SessionItem({
           trigger={null}
           title={title}
           item={item}
+          pinControls={pinControls}
           sessionStatuses={ctx.sessionStatuses}
           labels={ctx.labels}
           hasTransferTargets={canSendToWorkspace}
           onLabelsChange={ctx.onLabelsChange ? (ls) => ctx.onLabelsChange!(item.id, ls) : undefined}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
           onRename={() => ctx.onRenameClick(item.id, title)}
           onFlag={() => ctx.onFlag?.(item.id)}
           onUnflag={() => ctx.onUnflag?.(item.id)}
@@ -298,8 +324,34 @@ export function SessionItem({
       subtitleLeading={subSessionToggle}
       subtitleTrailing={hasLabels && !needsAttention ? <SessionBadges item={item} hiddenLabels={inheritedLabels} /> : undefined}
       titleSuffix={
-        (projectName || hasMessagingBinding || item.codingMode) ? (
+        (pinIndex >= 0 || attention !== 'idle' || projectName || hasMessagingBinding || item.codingMode || (onReorderDragStart && !isCompactMode)) ? (
           <div className="flex items-center gap-1">
+            {pinIndex >= 0 && depth === 0 && (
+              <span
+                draggable
+                role="img"
+                aria-label={t('session.pin.drag')}
+                title={t('session.pin.drag')}
+                onMouseDown={event => event.stopPropagation()}
+                onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData('application/x-craft-pin', item.id); event.dataTransfer.effectAllowed = 'move' }}
+                className="cursor-grab active:cursor-grabbing text-tertiary"
+              >
+                <GripVertical className="size-3.5" aria-hidden="true" />
+              </span>
+            )}
+            <SessionAttentionIndicator state={attention} />
+            {onReorderDragStart && !isCompactMode && (
+              <span
+                draggable
+                aria-hidden="true"
+                className="inline-flex size-6 -my-1 items-center justify-center text-tertiary cursor-grab active:cursor-grabbing"
+                onMouseDown={event => event.stopPropagation()}
+                onDragStart={onReorderDragStart}
+                onDragEnd={onReorderDragEnd}
+              >
+                <GripVertical className="size-3.5 pointer-events-none" />
+              </span>
+            )}
             {item.codingMode && (
               <CodeXml className="size-3.5 shrink-0 text-tertiary" aria-label={t("chat.codingMode.label")} />
             )}

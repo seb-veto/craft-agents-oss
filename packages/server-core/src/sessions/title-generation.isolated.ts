@@ -97,3 +97,25 @@ describe('temporary title agents', () => {
     expect(managed.name).toBe('ChatGPT Title Fix')
   })
 })
+
+describe('first messages that name no task', () => {
+  it('keeps the first-message title and titles the next message instead', async () => {
+    const { manager, managed, agent } = setup()
+    managed.name = 'Can you take this on?'
+    managed.autoTitle = 'Can you take this on?'
+    agent.generateTitle.mockResolvedValueOnce(null as unknown as string)
+    await (manager as any).generateTitle(managed, 'Can you take this on?')
+    expect(managed.name).toBe('Can you take this on?')
+    expect(managed.titleDeferred).toBe(true)
+  })
+
+  it('does not defer when the user renamed the chat meanwhile', async () => {
+    const { manager, managed, agent } = setup()
+    managed.name = 'My Name'
+    managed.autoTitle = 'Can you take this on?'
+    agent.generateTitle.mockResolvedValueOnce(null as unknown as string)
+    await (manager as any).generateTitle(managed, 'Can you take this on?')
+    expect(managed.name).toBe('My Name')
+    expect(managed.titleDeferred).toBeFalsy()
+  })
+})

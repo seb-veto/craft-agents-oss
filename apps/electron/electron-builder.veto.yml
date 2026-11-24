@@ -1,0 +1,29 @@
+extends: ./electron-builder.yml
+appId: com.tryveto.agents
+productName: Veto Agents
+copyright: Copyright © 2026 Veto contributors. Based on Craft Agents (Apache-2.0).
+afterPack: null
+publish: null
+extraMetadata:
+  main: dist/fork-bootstrap.cjs
+  homepage: https://github.com/seb-veto/craft-agents-oss
+  author:
+    name: Veto contributors
+directories:
+  output: release-veto
+mac:
+  icon: resources/veto/icon.icns
+  artifactName: Veto-Agents-${version}-${arch}.${ext}
+  extendInfo:
+    CFBundleIconName: VetoIcon
+    NSLocalNetworkUsageDescription: Veto Agents reaches local servers and APIs you ask it to access.
+    NSAppleEventsUsageDescription: Veto Agents reads the browser address when you invoke its companion.
+protocols:
+  - name: Veto Agents
+    schemes:
+      - vetoagents
+dmg:
+  background: null
+  icon: resources/veto/icon.icns
+  title: Veto Agents
+  artifactName: Veto-Agents-${version}-${arch}.dmg

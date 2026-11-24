@@ -6,7 +6,7 @@
  * and in synchronous callbacks (CompactBackButton).
  */
 
-import type { NavigationState } from '../../shared/types'
+import type { NavigationState } from '../../shared/navigation-types'
 
 /**
  * Returns true when the focused panel's nav state is in "detail" mode —
@@ -34,6 +34,10 @@ export function isDetailNavState(navState: NavigationState | null): boolean {
     case 'automations':
     case 'projects':
       return navState.details !== null
+    case 'reviews':
+    case 'inbox':
+    case 'documents':
+    case 'goals':
     case 'pages':
       return true
   }

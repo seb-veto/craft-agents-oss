@@ -533,7 +533,7 @@ export type SessionCommand =
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
-  | { type: 'setProjectId'; projectId: string | null }
+  | { type: 'setProjectId'; projectId: string | null; additionalSessionIds?: string[] }
   | { type: 'setKanbanColumn'; column: string | null }
   | { type: 'showInFinder' }
   | { type: 'copyPath' }
@@ -541,7 +541,7 @@ export type SessionCommand =
   | { type: 'updateShare' }
   | { type: 'revokeShare' }
   | { type: 'refreshTitle' }
-  | { type: 'setConnection'; connectionSlug: string }
+  | { type: 'setConnection'; connectionSlug: string; switchAccount?: boolean }
   | { type: 'setPendingPlanExecution'; planPath: string; draftInputSnapshot?: string }
   | { type: 'markCompactionComplete' }
   | { type: 'markPendingPlanExecutionDispatched' }
@@ -948,3 +948,6 @@ export interface DeepLinkNavigation {
   action?: string
   actionParams?: Record<string, string>
 }
+
+// Native Goals data crosses transport without importing host filesystem code.
+export type { Goal, GoalCaps, GoalState, GoalCriterion, GoalActivity, CreateGoalInput, GoalUserAction, GoalCriterionResult } from '../goals/types'

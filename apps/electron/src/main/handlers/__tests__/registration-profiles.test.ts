@@ -109,6 +109,10 @@ async function getExpectedCoreChannels(): Promise<Set<string>> {
     transfer,
     decisions,
     prWatch,
+    reviews,
+    sessionPins,
+    goals,
+    documents,
     codingRepos,
   ] = await Promise.all([
     import('@craft-agent/server-core/handlers/rpc/auth'),
@@ -132,6 +136,10 @@ async function getExpectedCoreChannels(): Promise<Set<string>> {
     import('@craft-agent/server-core/handlers/rpc/transfer'),
     import('@craft-agent/server-core/handlers/rpc/decisions'),
     import('@craft-agent/server-core/handlers/rpc/pr-watch'),
+    import('@craft-agent/server-core/handlers/rpc/reviews'),
+    import('@craft-agent/server-core/handlers/rpc/session-pins'),
+    import('@craft-agent/server-core/handlers/rpc/goals'),
+    import('@craft-agent/server-core/handlers/rpc/documents'),
     import('@craft-agent/server-core/handlers/rpc/coding-repos'),
   ])
 
@@ -157,6 +165,10 @@ async function getExpectedCoreChannels(): Promise<Set<string>> {
     ...transfer.HANDLED_CHANNELS,
     ...decisions.HANDLED_CHANNELS,
     ...prWatch.HANDLED_CHANNELS,
+    ...reviews.HANDLED_CHANNELS,
+    ...sessionPins.HANDLED_CHANNELS,
+    ...goals.HANDLED_CHANNELS,
+    ...documents.HANDLED_CHANNELS,
     ...codingRepos.HANDLED_CHANNELS,
   ])
 }

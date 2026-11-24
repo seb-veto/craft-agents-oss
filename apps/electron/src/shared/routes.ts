@@ -196,6 +196,20 @@ export const routes = {
         ? `pages/page/${pageSlug}` as const
         : 'pages' as const,
 
+    /** Reviews queue and selected pull request. */
+    reviews: (reviewId?: string) => reviewId ? `reviews/review/${encodeURIComponent(reviewId)}` as const : 'reviews' as const,
+
+    /** Inbox list and selected session activity. */
+    inbox: (sessionId?: string) => sessionId ? `inbox/session/${encodeURIComponent(sessionId)}` as const : 'inbox' as const,
+
+    /** Documents library and editor. */
+    documents: (documentId?: string) =>
+      documentId ? `documents/document/${encodeURIComponent(documentId)}` as const : 'documents' as const,
+
+    /** Goals library and authoritative goal detail. */
+    goals: (goalId?: string) =>
+      goalId ? `goals/goal/${encodeURIComponent(goalId)}` as const : 'goals' as const,
+
     /** Kanban board view (sessions navigator, board view mode, all sessions) */
     board: () => 'board' as const,
   },

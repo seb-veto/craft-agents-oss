@@ -74,6 +74,7 @@ export {
 
 // Local imports for use within this file's factory function
 import { getSessionScopedToolCallbacks } from './session-scoped-tool-callback-registry.ts';
+import { getGoalToolRole, goalToolDenial } from './goal-tool-policy.ts';
 import { attachSessionSelfManagementBindings } from './session-self-management-bindings.ts';
 
 /** Backend-executed session tools currently supported by the Claude adapter layer. */
@@ -228,9 +229,11 @@ export function getSessionScopedTools(
 ): ToolServer {
   // A coding session's tool set depends on its profile inputs, so they are part of its key.
   // The default key is unchanged: the default tool set does not depend on them.
-  const cacheKey = profileOptions?.profile === 'coding'
+  const goalRole = getGoalToolRole(sessionId);
+  const profileKey = profileOptions?.profile === 'coding'
     ? `${sessionId}::${workspaceRootPath}::coding:${profileOptions.hasEnabledSources ? 1 : 0}:${profileOptions.hasProject ? 1 : 0}`
     : `${sessionId}::${workspaceRootPath}`;
+  const cacheKey = `${profileKey}::goal:${goalRole ?? '-'}:${getSessionScopedToolCallbacks(sessionId)?.goalReadFolders ? 1 : 0}`;
 
   // Return cached tools if available, but always create a fresh MCP server wrapper
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -262,6 +265,8 @@ export function getSessionScopedTools(
     function registryTool(name: string, schema: any) {
       const def = SESSION_TOOL_REGISTRY.get(name)!;
       return tool(name, TOOL_DESCRIPTIONS[name] || def.description, schema, async (args: any) => {
+        const denial = goalToolDenial(sessionId, name);
+        if (denial) return { content: [{ type: 'text' as const, text: `[ERROR] ${denial}` }], isError: true };
         const result = await def.handler!(ctx, args);
         return convertResult(result);
       }, def.readOnly ? { annotations: { readOnlyHint: true } } : undefined);
@@ -280,7 +285,8 @@ export function getSessionScopedTools(
       // Users with external browser tools (Playwright, Puppeteer, etc.) can disable the built-in one.
       includeBrowser: getBrowserToolEnabled(),
       ...profileOptions,
-    });
+      goalRole,
+    }).filter(def => !getSessionScopedToolCallbacks(sessionId)?.goalReadFolders || def.goalRoles);
     const visible = new Set(defs.map(def => def.name));
 
     // Registry tools — all tools with handlers

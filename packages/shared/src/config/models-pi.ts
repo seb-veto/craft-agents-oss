@@ -17,6 +17,7 @@ import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import type { Model, Api } from '@earendil-works/pi-ai';
 import type { ModelDefinition } from './models.ts';
 import { fromPiProviderId, toPiProviderId } from './pi-provider-ids.ts';
+import { withCodexSol62Fallback } from './pi-codex-sol-compat.ts';
 
 // ============================================
 // PI MODEL DISCOVERY
@@ -89,7 +90,7 @@ function isBareBedrockClaudeModel(modelId: string): boolean {
  */
 export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinition[] {
   try {
-    const models = getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]);
+    const models = withCodexSol62Fallback(piAuthProvider, getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]));
     if (models.length > 0) {
       return models
         .filter(m => !isExcludedPiModel(m.id))
@@ -112,7 +113,7 @@ export function getAllPiModels(): ModelDefinition[] {
   const allModels: ModelDefinition[] = [];
   for (const provider of getProviders()) {
     try {
-      const models = getModels(provider);
+      const models = withCodexSol62Fallback(fromPiProviderId(provider), getModels(provider));
       allModels.push(...models
         .filter(m => !isExcludedPiModel(m.id))
         .map(piModelToDefinition)

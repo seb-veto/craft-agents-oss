@@ -1,3 +1,4 @@
+import { selectableModelOptions } from '@/lib/model-options'
 import * as React from 'react'
 import { ANTHROPIC_MODELS, getModelDisplayName, type ModelDefinition } from '@config/models'
 import {
@@ -6,7 +7,7 @@ import {
   type LlmConnectionWithStatus,
 } from '@config/llm-connections'
 import { derivePickerMode, type PickerMode } from './picker-mode'
-import { groupConnectionsByProvider, stripPiPrefixForDisplay } from './model-picker-helpers'
+import { getClaudeAccountSwitchTargets, groupConnectionsByProvider, stripPiPrefixForDisplay } from './model-picker-helpers'
 
 export interface ModelPickerStateInput {
   llmConnections: LlmConnectionWithStatus[]
@@ -26,6 +27,7 @@ export interface ModelPickerState {
   effectiveConnectionDetails: LlmConnectionWithStatus | null
   /** The session's own connection (null while it has none). */
   currentConnectionDetails: LlmConnectionWithStatus | null
+  accountSwitchTargets: LlmConnectionWithStatus[]
   /** Non-null only for a `pi_compat` connection with at most one model (a custom endpoint's fixed model). */
   connectionDefaultModel: string | null
   pickerMode: PickerMode
@@ -81,29 +83,35 @@ export function useModelPickerState({
     // Connection removed: never fall through to another connection's models
     if (connectionUnavailable) return []
     // Every connection has models (backfillAllConnectionModels); ANTHROPIC_MODELS is a safety net
-    return effectiveConnectionDetails?.models || ANTHROPIC_MODELS
+    return selectableModelOptions(effectiveConnectionDetails?.models || ANTHROPIC_MODELS)
   }, [effectiveConnectionDetails, connectionUnavailable])
 
   const thinkingDisabled = React.useMemo(() => {
-    const model = availableModels.find(m => typeof m !== 'string' && m.id === currentModel)
+    const model = (effectiveConnectionDetails?.models || ANTHROPIC_MODELS).find(m => typeof m !== 'string' && m.id === currentModel)
     return typeof model !== 'string' && model?.supportsThinking === false
-  }, [availableModels, currentModel])
+  }, [effectiveConnectionDetails, currentModel])
 
   // The full name, not the short one
   const currentModelDisplayName = React.useMemo(() => {
     const modelToDisplay = connectionDefaultModel ?? currentModel
-    const model = availableModels.find(m => (typeof m === 'string' ? m === modelToDisplay : m.id === modelToDisplay))
+    // A hidden choice may still be selected by an existing session. Preserve its label.
+    const model = (effectiveConnectionDetails?.models || ANTHROPIC_MODELS).find(m => (typeof m === 'string' ? m === modelToDisplay : m.id === modelToDisplay))
     if (!model) return stripPiPrefixForDisplay(getModelDisplayName(modelToDisplay))
     if (typeof model === 'string') return stripPiPrefixForDisplay(model)
     // Partial entries (custom-endpoint config, vision-toggle promotions) may lack a name; the
     // trigger must never go blank
     return model.name ?? stripPiPrefixForDisplay(model.id)
-  }, [availableModels, currentModel, connectionDefaultModel])
+  }, [effectiveConnectionDetails, currentModel, connectionDefaultModel])
 
   const connectionsByProvider = React.useMemo(() => groupConnectionsByProvider(llmConnections), [llmConnections])
 
+  const accountSwitchTargets = React.useMemo(() => !isEmptySession && pickerMode === 'flat'
+    ? getClaudeAccountSwitchTargets(llmConnections, currentConnection, currentModel)
+    : [], [isEmptySession, pickerMode, llmConnections, currentConnection, currentModel])
+
   return {
     effectiveConnection,
+    accountSwitchTargets,
     effectiveConnectionDetails,
     currentConnectionDetails,
     connectionDefaultModel,

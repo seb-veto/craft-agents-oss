@@ -25,6 +25,33 @@ function createMockRegistry(
 }
 
 describe('resolvePiModel', () => {
+  describe('Codex Sol compatibility', () => {
+    const base = Object.freeze({ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', provider: 'openai-codex', contextWindow: 272_000, api: 'openai-codex-responses' });
+
+    it('resolves the 6.2 ID on the existing Codex transport', () => {
+      const registry = createMockRegistry({ 'openai-codex': [base] });
+      const expected = { ...base, id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol', contextWindow: 500_000 };
+      expect(resolvePiModel(registry, 'pi/gpt-6.2-sol', 'openai-codex')).toEqual(expected as any);
+      expect(resolvePiModel(registry, 'gpt-6.2-sol', 'openai-codex')).toEqual(expected as any);
+      expect(resolvePiModel(registry, 'gpt-6.1-sol', 'openai-codex')).toBe(base as any);
+    });
+
+    it('keeps native and explicitly preferred custom endpoint models ahead of the fallback', () => {
+      const native = { ...base, id: 'gpt-6.2-sol', name: 'Native Sol' };
+      const custom = { ...native, name: 'Custom Sol', provider: 'custom-endpoint' };
+      const registry = createMockRegistry({ 'openai-codex': [base, native], 'custom-endpoint': [custom] });
+      expect(resolvePiModel(registry, 'gpt-6.2-sol', 'openai-codex')).toBe(native as any);
+      expect(resolvePiModel(registry, 'gpt-6.2-sol', 'openai-codex', true)).toBe(custom as any);
+    });
+
+    it('does not synthesize a model for another provider, no auth provider, or no Codex base', () => {
+      const registry = createMockRegistry({ 'openai-codex': [base], openai: [{ ...base, provider: 'openai' }] });
+      expect(resolvePiModel(registry, 'gpt-6.2-sol', 'openai')).toBeUndefined();
+      expect(resolvePiModel(registry, 'gpt-6.2-sol')).toBeUndefined();
+      expect(resolvePiModel(createMockRegistry({}), 'gpt-6.2-sol', 'openai-codex')).toBeUndefined();
+    });
+  });
+
   describe('preferCustomEndpoint', () => {
     it('returns custom-endpoint model when preferCustomEndpoint=true and model exists in both providers', () => {
       const registry = createMockRegistry({

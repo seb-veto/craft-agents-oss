@@ -1,3 +1,4 @@
+import { selectableModelOptions } from '@/lib/model-options'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -52,11 +53,12 @@ interface CompactModelSelectorProps {
   currentModel: string
   currentConnection?: string
   onModelChange: (model: string, connection?: string) => void
-  onConnectionChange?: (connectionSlug: string) => void
+  onConnectionChange?: (connectionSlug: string, switchAccount?: boolean) => void
   thinkingLevel?: ThinkingLevel
   onThinkingLevelChange?: (level: ThinkingLevel) => void
   isEmptySession?: boolean
   connectionUnavailable?: boolean
+  disableAccountSwitch?: boolean
   contextStatus?: ContextStatus
 }
 
@@ -69,6 +71,7 @@ export function CompactModelSelector({
   onThinkingLevelChange,
   isEmptySession = false,
   connectionUnavailable = false,
+  disableAccountSwitch,
   contextStatus,
 }: CompactModelSelectorProps) {
   const { t } = useTranslation()
@@ -84,6 +87,7 @@ export function CompactModelSelector({
   const {
     effectiveConnection,
     effectiveConnectionDetails,
+    accountSwitchTargets,
     connectionDefaultModel,
     pickerMode,
     availableModels,
@@ -249,7 +253,7 @@ export function CompactModelSelector({
                       </button>
                       {isAuthenticated && isExpanded && (
                         <div className="pl-6 flex flex-col gap-0.5">
-                          {(conn.models || ANTHROPIC_MODELS).map(model => {
+                          {selectableModelOptions(conn.models || ANTHROPIC_MODELS).map(model => {
                             const modelId = typeof model === 'string' ? model : model.id
                             const modelName = typeof model === 'string'
                               ? stripPiPrefixForDisplay(getModelShortName(model))
@@ -364,6 +368,28 @@ export function CompactModelSelector({
             })
           )}
 
+          {/* === Account switching for an existing chat === */}
+          {onConnectionChange && accountSwitchTargets.length > 0 && (
+            <>
+              <div className={SHEET_SECTION}>
+                {t('chat.usingConnection', { name: effectiveConnectionDetails?.name })}
+              </div>
+              {accountSwitchTargets.map(conn => (
+                <DrawerClose asChild key={conn.slug}>
+                  <button
+                    type="button"
+                    disabled={disableAccountSwitch}
+                    className={cn(SHEET_ROW, 'gap-2 hover:bg-fill-hover disabled:text-disabled')}
+                    onClick={() => onConnectionChange(conn.slug, true)}
+                    aria-label={t('chat.modelPicker.switchAccountTo', { name: conn.name })}
+                  >
+                    <ConnectionIcon connection={conn} size={14} />
+                    <span className="truncate">{t('chat.modelPicker.switchAccountTo', { name: conn.name })}</span>
+                  </button>
+                </DrawerClose>
+              ))}
+            </>
+          )}
           {/* === Thinking section === */}
           {THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
             <>

@@ -15,7 +15,7 @@ import type {
   SourceFilter,
   AutomationFilter,
   RightSidebarPanel,
-} from './types'
+} from './navigation-types'
 import { isValidSettingsSubpage, type SettingsSubpage } from './settings-registry'
 
 // =============================================================================
@@ -35,7 +35,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'projects' | 'pages' | 'settings'
+export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'projects' | 'pages' | 'goals' | 'documents' | 'inbox' | 'reviews' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -63,7 +63,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'skills', 'automations', 'projects', 'pages', 'settings'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'skills', 'automations', 'projects', 'pages', 'goals', 'documents', 'inbox', 'reviews', 'settings'
 ]
 
 /**
@@ -190,6 +190,49 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
       }
     }
     return null
+  }
+
+  if (first === 'reviews') {
+    if (segments.length === 1) return { navigator: 'reviews', details: null }
+    if (segments.length !== 3 || segments[1] !== 'review') return null
+    try {
+      const id = decodeURIComponent(segments[2])
+      return id.trim() ? { navigator: 'reviews', details: { type: 'review', id } } : null
+    } catch { return null }
+  }
+
+  if (first === 'inbox') {
+    if (segments.length === 1) return { navigator: 'inbox', details: null }
+    if (segments.length !== 3 || segments[1] !== 'session') return null
+    try {
+      const id = decodeURIComponent(segments[2])
+      return id.trim() ? { navigator: 'inbox', details: { type: 'inbox-session', id } } : null
+    } catch {
+      return null
+    }
+  }
+
+  if (first === 'documents') {
+    if (segments.length === 1) return { navigator: 'documents', details: null }
+    if (segments.length !== 3 || segments[1] !== 'document') return null
+    try {
+      const id = decodeURIComponent(segments[2])
+      return id.trim() ? { navigator: 'documents', details: { type: 'document', id } } : null
+    } catch {
+      return null
+    }
+  }
+
+  // Goals use strict paths and encoded IDs, including for panel restoration.
+  if (first === 'goals') {
+    if (segments.length === 1) return { navigator: 'goals', details: null }
+    if (segments.length !== 3 || segments[1] !== 'goal') return null
+    try {
+      const id = decodeURIComponent(segments[2])
+      return id.trim() ? { navigator: 'goals', details: { type: 'goal', id } } : null
+    } catch {
+      return null
+    }
   }
 
   // Pages navigator
@@ -339,6 +382,18 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     return `projects/project/${parsed.details.id}`
   }
 
+  if (parsed.navigator === 'reviews') return parsed.details ? `reviews/review/${encodeURIComponent(parsed.details.id)}` : 'reviews'
+
+  if (parsed.navigator === 'inbox') return parsed.details ? `inbox/session/${encodeURIComponent(parsed.details.id)}` : 'inbox'
+
+  if (parsed.navigator === 'documents') {
+    return parsed.details ? `documents/document/${encodeURIComponent(parsed.details.id)}` : 'documents'
+  }
+
+  if (parsed.navigator === 'goals') {
+    return parsed.details ? `goals/goal/${encodeURIComponent(parsed.details.id)}` : 'goals'
+  }
+
   if (parsed.navigator === 'pages') {
     if (!parsed.details) return 'pages'
     return `pages/page/${parsed.details.id}`
@@ -476,6 +531,22 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'projects', params: {} }
     }
     return { type: 'view', name: 'project-info', id: compound.details.id, params: {} }
+  }
+
+  if (compound.navigator === 'reviews') {
+    return { type: 'view', name: compound.details ? 'review-info' : 'reviews', ...(compound.details ? { id: compound.details.id } : {}), params: {} }
+  }
+
+  if (compound.navigator === 'inbox') {
+    return { type: 'view', name: compound.details ? 'inbox-session' : 'inbox', ...(compound.details ? { id: compound.details.id } : {}), params: {} }
+  }
+
+  if (compound.navigator === 'documents') {
+    return { type: 'view', name: compound.details ? 'document-info' : 'documents', ...(compound.details ? { id: compound.details.id } : {}), params: {} }
+  }
+
+  if (compound.navigator === 'goals') {
+    return { type: 'view', name: compound.details ? 'goal-info' : 'goals', ...(compound.details ? { id: compound.details.id } : {}), params: {} }
   }
 
   // Pages
@@ -632,6 +703,22 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  if (compound.navigator === 'reviews') {
+    return { navigator: 'reviews', details: compound.details ? { type: 'review', reviewId: compound.details.id } : null }
+  }
+
+  if (compound.navigator === 'inbox') {
+    return { navigator: 'inbox', details: compound.details ? { type: 'inbox-session', sessionId: compound.details.id } : null }
+  }
+
+  if (compound.navigator === 'documents') {
+    return { navigator: 'documents', details: compound.details ? { type: 'document', documentId: compound.details.id } : null }
+  }
+
+  if (compound.navigator === 'goals') {
+    return { navigator: 'goals', details: compound.details ? { type: 'goal', goalId: compound.details.id } : null }
+  }
+
   // Pages
   if (compound.navigator === 'pages') {
     if (!compound.details) {
@@ -731,6 +818,22 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
         }
       }
       return { navigator: 'projects', details: null }
+    case 'reviews':
+      return { navigator: 'reviews', details: null }
+    case 'review-info':
+      return { navigator: 'reviews', details: parsed.id ? { type: 'review', reviewId: parsed.id } : null }
+    case 'inbox':
+      return { navigator: 'inbox', details: null }
+    case 'inbox-session':
+      return { navigator: 'inbox', details: parsed.id ? { type: 'inbox-session', sessionId: parsed.id } : null }
+    case 'documents':
+      return { navigator: 'documents', details: null }
+    case 'document-info':
+      return { navigator: 'documents', details: parsed.id ? { type: 'document', documentId: parsed.id } : null }
+    case 'goals':
+      return { navigator: 'goals', details: null }
+    case 'goal-info':
+      return { navigator: 'goals', details: parsed.id ? { type: 'goal', goalId: parsed.id } : null }
     case 'pages':
       return { navigator: 'pages', details: null }
     case 'page-info':
@@ -854,6 +957,18 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
       navigator: 'projects',
       details: state.details ? { type: 'project', id: state.details.projectSlug } : null,
     }
+  }
+
+  if (state.navigator === 'reviews') return { navigator: 'reviews', details: state.details ? { type: 'review', id: state.details.reviewId } : null }
+
+  if (state.navigator === 'inbox') return { navigator: 'inbox', details: state.details ? { type: 'inbox-session', id: state.details.sessionId } : null }
+
+  if (state.navigator === 'documents') {
+    return { navigator: 'documents', details: state.details ? { type: 'document', id: state.details.documentId } : null }
+  }
+
+  if (state.navigator === 'goals') {
+    return { navigator: 'goals', details: state.details ? { type: 'goal', id: state.details.goalId } : null }
   }
 
   if (state.navigator === 'pages') {

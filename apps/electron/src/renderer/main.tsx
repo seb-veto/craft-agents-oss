@@ -15,7 +15,8 @@ import LanguageDetector from 'i18next-browser-languagedetector'
 import './index.css'
 
 // Initialize i18n before any React rendering
-setupI18n([LanguageDetector, initReactI18next])
+// index.html carries the fork's product name ("Veto Agents"); UI copy follows it.
+setupI18n([LanguageDetector, initReactI18next], { productName: document.title })
 
 // One-shot bootstrap: ensure the main process's i18n + preferences.json learn
 // the language we just restored from localStorage. The main-process IPC handler

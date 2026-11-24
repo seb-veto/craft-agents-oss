@@ -1,3 +1,4 @@
+import { selectableModelOptions } from '@/lib/model-options'
 import * as React from 'react'
 import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -71,7 +72,7 @@ function buildModelCatalog(connections: LlmConnectionWithStatus[]): {
     const rawModels = conn.models?.length
       ? conn.models
       : getDefaultModelsForConnection(conn.providerType, conn.piAuthProvider)
-    const models = rawModels.map(m => {
+    const models = selectableModelOptions(rawModels).map(m => {
       const id = typeof m === 'string' ? m : m.id
       const name = typeof m === 'string' ? getModelShortName(m) : m.name || getModelShortName(m.id)
       return { id, name }

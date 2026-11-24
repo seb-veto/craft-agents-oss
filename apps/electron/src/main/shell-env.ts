@@ -14,8 +14,14 @@ import { mainLog } from './logger'
 
 // Environment variables that should NOT be imported from the shell
 // VITE_* vars from dev mode would make packaged app try to load from localhost
-const shouldSkipEnvVar = (key: string): boolean => {
-  return key.startsWith('VITE_')
+// Fork identity/isolation variables are set by fork-bootstrap.cjs before main loads; a login shell must
+// never override them (e.g. an exported CRAFT_CONFIG_DIR would point Veto Agents at the Craft Agents profile).
+const PROTECTED_ENV_VARS = new Set([
+  'CRAFT_APP_NAME', 'CRAFT_CONFIG_DIR', 'CRAFT_DEEPLINK_SCHEME', 'CRAFT_DISABLE_AUTO_UPDATE',
+  'CRAFT_SKIP_PROTOCOL_REGISTRATION', 'VETO_QA_BACKGROUND', 'VETO_QA_LOOPBACK_ONLY',
+])
+export const shouldSkipEnvVar = (key: string): boolean => {
+  return key.startsWith('VITE_') || PROTECTED_ENV_VARS.has(key)
 }
 
 /**

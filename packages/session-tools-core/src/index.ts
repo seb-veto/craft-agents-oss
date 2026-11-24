@@ -163,6 +163,10 @@ export type {
   ProjectMemoryAppendResult,
   // Pages types
   PagesToolCallbacks,
+  GoalToolRole,
+  GoalToolCallbacks,
+  GoalToolSnapshot,
+  GoalToolCriterionResult,
   PageToolRefreshSpec,
   PageToolSummary,
   PageToolDataSummary,
@@ -277,6 +281,11 @@ export type {
   DeletePageArgs,
   DecideArgs,
 } from './handlers/index.ts';
+
+// Goals schemas, also used to validate the host-side callback invocation.
+export {
+  GoalGetSchema, GoalProgressSchema, GoalAskSchema, GoalEvidenceSchema, GoalRequestVerificationSchema, GoalVerdictSchema,
+} from './handlers/goals.ts';
 
 // Tool definitions — single source of truth
 export {

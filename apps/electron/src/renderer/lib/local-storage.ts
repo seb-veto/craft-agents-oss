@@ -10,6 +10,9 @@ const PREFIX = 'craft-'
  * Centralized here to avoid magic strings and key collisions.
  */
 export const KEYS = {
+  // Crash-recovery drafts only; saved Documents are canonical workspace files.
+  documentDraft: 'document-draft',
+
   // Chat sidebar
   sidebarVisible: 'sidebar-visible',
   sidebarWidth: 'sidebar-width',
@@ -20,7 +23,11 @@ export const KEYS = {
   viewFilters: 'view-filters', // Per-view filter map: { [viewKey]: { statuses, labels } }
   expandedFolders: 'expanded-folders',
   collapsedSidebarItems: 'collapsed-sidebar-items',
+  reviewPreferences: 'review-preferences', // per-workspace queue display, snooze and reviewed files
+  inboxPreferences: 'inbox-preferences', // per-workspace snooze, dismissal and display settings
+  workspaceSidebarLayout: 'workspace-sidebar-layout', // workspace-scoped sidebar visibility and order
   chatGroupingMode: 'chat-grouping-mode', // How to group chats: 'date' | 'status'
+  manualSessionOrder: 'manual-session-order', // Root IDs ordered per workspace and view
   collapsedSessionGroups: 'collapsed-session-groups', // Collapsed group keys in session list
   collapsedSessionFamilies: 'collapsed-session-families', // Sessions whose sub-sessions are hidden (workspace-scoped via suffix)
 

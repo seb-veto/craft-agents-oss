@@ -13,7 +13,7 @@
 import type { LLMQueryRequest, LLMQueryResult } from './llm-tool.ts';
 import type { SpawnSessionFn } from './spawn-session-tool.ts';
 import type { BrowserPaneFns } from './browser-tools.ts';
-import type { AuthRequest } from '@craft-agent/session-tools-core';
+import type { AuthRequest, GoalToolCallbacks, GoalToolRole } from '@craft-agent/session-tools-core';
 import { debug } from '../utils/debug.ts';
 
 /**
@@ -97,6 +97,11 @@ export interface SessionScopedToolCallbacks {
    * SessionManager to the invoking session's workspace.
    */
   pages?: import('@craft-agent/session-tools-core').PagesToolCallbacks;
+  /** Granted by SessionManager from persisted Goal assignment, never from model input. */
+  goals?: GoalToolCallbacks;
+  goalRole?: GoalToolRole;
+  /** A Goal-assigned session is limited to its own persisted documents and Goal tools. */
+  goalReadFolders?: readonly string[];
   /**
    * MCP source resources & prompts tools (source_list_resources/read_resource/
    * list_prompts/get_prompt). Wired by SessionManager to the session's MCP pool,

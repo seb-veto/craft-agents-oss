@@ -13,13 +13,15 @@ import {
 import { FEATURE_FLAGS } from '../../../feature-flags.ts';
 import { isDecisionFeatureActive } from '../../../decisions/resolve.ts';
 import { getBrowserToolEnabled } from '../../../config/storage.ts';
+import { getGoalToolRole } from '../../goal-tool-policy.ts';
+import { getSessionScopedToolCallbacks } from '../../session-scoped-tool-callback-registry.ts';
 import type { SessionToolProfileOptions } from '../../session-scoped-tools.ts';
 
 export type SessionToolProxyDef = JsonSchemaToolDef;
 
 export { SESSION_TOOL_NAMES };
 
-export function getSessionToolProxyDefs(profileOptions?: SessionToolProfileOptions): SessionToolProxyDef[] {
+export function getSessionToolProxyDefs(profileOptions?: SessionToolProfileOptions, sessionId?: string): SessionToolProxyDef[] {
   return getToolDefsAsJsonSchema({
     prefix: 'mcp__session__',
     includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback,
@@ -29,5 +31,6 @@ export function getSessionToolProxyDefs(profileOptions?: SessionToolProfileOptio
     includeDecide: isDecisionFeatureActive('decideTool'),
     includeBrowser: getBrowserToolEnabled(),
     ...profileOptions,
-  });
+    goalRole: sessionId ? getGoalToolRole(sessionId) : undefined,
+  }).filter(def => !sessionId || !getSessionScopedToolCallbacks(sessionId)?.goalReadFolders || def.name.startsWith('mcp__session__goal_'));
 }

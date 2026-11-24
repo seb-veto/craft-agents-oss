@@ -9,6 +9,7 @@ import type { LoadedSkill } from '../skills/types'
 import type { LoadedProject } from '../projects/types'
 import type { LoadedPage } from '../pages/types'
 import type { PrWatchSessionState } from './pr-watch'
+import type { Goal } from '../goals/types'
 import { RPC_CHANNELS } from './channels'
 import type {
   SessionEvent,
@@ -20,6 +21,8 @@ import type {
 } from './dto'
 
 export interface BroadcastEventMap {
+  [RPC_CHANNELS.sessionPins.CHANGED]: [workspaceId: string, sessionIds: string[]]
+  [RPC_CHANNELS.goals.CHANGED]: [workspaceId: string, goals: Goal[]]
   // Session events (workspace-scoped via broadcastToWorkspace)
   [RPC_CHANNELS.sessions.EVENT]: [event: SessionEvent]
   [RPC_CHANNELS.sessions.UNREAD_SUMMARY_CHANGED]: [summary: UnreadSummary]
@@ -32,6 +35,7 @@ export interface BroadcastEventMap {
   [RPC_CHANNELS.automations.CHANGED]: [workspaceId: string]
   [RPC_CHANNELS.skills.CHANGED]: [workspaceId: string, skills: LoadedSkill[]]
   [RPC_CHANNELS.projects.CHANGED]: [workspaceId: string, projects: LoadedProject[]]
+  [RPC_CHANNELS.documents.CHANGED]: [workspaceId: string]
   [RPC_CHANNELS.pages.CHANGED]: [workspaceId: string, pages: LoadedPage[]]
   // PR watcher: to the subscribing client only
   [RPC_CHANNELS.prWatch.CHANGED]: [sessionId: string, state: PrWatchSessionState]

@@ -111,6 +111,10 @@ async function getExpectedChannels(): Promise<Set<string>> {
     decisions,
     prWatch,
     codingRepos,
+    documents,
+    goals,
+    reviews,
+    sessionPins,
   ] = await Promise.all([
     import('@craft-agent/server-core/handlers/rpc/auth'),
     import('@craft-agent/server-core/handlers/rpc/automations'),
@@ -134,6 +138,11 @@ async function getExpectedChannels(): Promise<Set<string>> {
     import('@craft-agent/server-core/handlers/rpc/decisions'),
     import('@craft-agent/server-core/handlers/rpc/pr-watch'),
     import('@craft-agent/server-core/handlers/rpc/coding-repos'),
+    // Veto Agents fork channels
+    import('@craft-agent/server-core/handlers/rpc/documents'),
+    import('@craft-agent/server-core/handlers/rpc/goals'),
+    import('@craft-agent/server-core/handlers/rpc/reviews'),
+    import('@craft-agent/server-core/handlers/rpc/session-pins'),
   ])
 
   // GUI handler channels (remain in electron)
@@ -167,6 +176,10 @@ async function getExpectedChannels(): Promise<Set<string>> {
     ...decisions.HANDLED_CHANNELS,
     ...prWatch.HANDLED_CHANNELS,
     ...codingRepos.HANDLED_CHANNELS,
+    ...documents.HANDLED_CHANNELS,
+    ...goals.HANDLED_CHANNELS,
+    ...reviews.HANDLED_CHANNELS,
+    ...sessionPins.HANDLED_CHANNELS,
     ...browser.HANDLED_CHANNELS,
     ...guiSystem.GUI_HANDLED_CHANNELS,
     ...guiWorkspace.GUI_HANDLED_CHANNELS,

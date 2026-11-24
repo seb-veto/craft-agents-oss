@@ -6,7 +6,7 @@ import {
   buildRouteFromNavigationState,
 } from '../route-parser'
 import { routes } from '../routes'
-import { isSessionsNavigation } from '../types'
+import { isSessionsNavigation } from '../navigation-types'
 
 describe('route-parser: label filter routes', () => {
   it('parses a plain label route', () => {

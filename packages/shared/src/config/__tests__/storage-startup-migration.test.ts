@@ -146,6 +146,29 @@ describe('startup migration (integration)', () => {
     expect(connection.defaultModel).toBe(migratedModels[0])
   })
 
+  it('preserves both Sol 6.2 and an existing default in a curated Codex list', () => {
+    const { configDir, workspaceRoot, configPath } = setupWorkspaceConfigDir()
+    const models = ['pi/gpt-6-luna', 'pi/gpt-6.2-sol']
+    writeRootConfig(configPath, workspaceRoot, [{
+      slug: 'pi-api-key',
+      name: 'Craft Agents Backend (Codex)',
+      providerType: 'pi',
+      authType: 'oauth',
+      piAuthProvider: 'openai-codex',
+      modelSelectionMode: 'userDefined3Tier',
+      createdAt: Date.now(),
+      models,
+      defaultModel: 'pi/gpt-6-luna',
+    }])
+
+    runMigration(configDir)
+
+    const connection = readPiApiKeyConnection(configPath)
+    expect(connection.modelSelectionMode).toBe('userDefined3Tier')
+    expect(getModelIds(connection)).toEqual(models)
+    expect(connection.defaultModel).toBe('pi/gpt-6-luna')
+  })
+
   it('normalizes auto mode model set back to provider defaults', () => {
     const { configDir, workspaceRoot, configPath } = setupWorkspaceConfigDir()
 

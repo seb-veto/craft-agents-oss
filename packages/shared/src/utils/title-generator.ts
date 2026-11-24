@@ -43,6 +43,23 @@ export function sanitizeLanguage(language?: string): string | undefined {
 }
 
 /**
+ * Title style shared by the initial and regenerate prompts: short, recognizable task
+ * names (an imperative verb and object, or a concrete role/check label) rather than
+ * descriptions of the conversation.
+ */
+const TITLE_STYLE_RULES = [
+  'Use 2-6 words. For work, start with a plain imperative verb and its object ("Fix Login Redirects", "Ship Designer"). For a standing role, recurring check or system, use a concrete noun label ("Codex Health Check", "Software Factory").',
+  'Keep product names, version numbers and iteration suffixes exactly ("Ship Palomar v0.01.01"). If the user names the chat, use that name exactly.',
+  'Do not describe the conversation or its state: no "-ing" openers, no words like Question, Discussion, Request, Investigation or Help, no status words, emoji, ticket IDs or markdown.',
+];
+
+/** The model's answer when the messages do not say what the task is. */
+export const NO_TITLE_SENTINEL = 'NONE';
+
+const TITLE_EXAMPLES =
+  'Examples: "Ship Designer", "Ship Palomar v0.01.01", "Codex Health Check", "Software Factory", "Resource the insight factory", "Fix Login Redirects"';
+
+/**
  * Build a language instruction for title prompts.
  * Explicit preference takes priority; otherwise auto-detect from message content.
  */
@@ -64,14 +81,15 @@ function buildLanguageInstruction(language?: string): string {
 export function buildTitlePrompt(message: string, options?: { language?: string }): string {
   const snippet = sliceAtWord(message, 500);
   return [
-    'What topic or area is the user exploring? Reply with ONLY a short descriptive title (2-5 words).',
-    'Use a short descriptive label. Use plain text only - no markdown.',
+    'Name the task this chat is for, the way a person labels it in a sidebar. Reply with ONLY the title, in plain text.',
+    ...TITLE_STYLE_RULES,
+    `If the message does not say what the task is (for example "Can you take this on?" or "continue"), reply with exactly ${NO_TITLE_SENTINEL}.`,
     buildLanguageInstruction(options?.language),
-    'Examples: "Auto Title Generation", "Dark Mode Support", "Fix API Authentication", "Database Schema Design", "React Performance"',
+    TITLE_EXAMPLES,
     '',
     'User: ' + snippet,
     '',
-    'Topic:',
+    'Title:',
   ].join('\n');
 }
 
@@ -154,12 +172,12 @@ export function buildRegenerateTitlePrompt(
   const assistantSnippet = sliceAtWord(lastAssistantResponse, 500);
 
   const lines: string[] = [
-    'Based on these messages, what is this conversation about?',
-    'Reply with ONLY a short descriptive title (2-5 words).',
-    'Use a short descriptive label. Use plain text only - no markdown.',
+    'Name the task this chat is for, based on these messages, the way a person labels it in a sidebar. Name the lasting goal, not the latest step. Reply with ONLY the title, in plain text.',
+    ...TITLE_STYLE_RULES,
     'Ignore short acknowledgement messages (like "ok", "thanks", "do it") that don\'t carry topic information.',
+    `If the messages never say what the task is, reply with exactly ${NO_TITLE_SENTINEL}.`,
     buildLanguageInstruction(options?.language),
-    'Examples: "Auto Title Generation", "Dark Mode Support", "Fix API Authentication", "Database Schema Design"',
+    TITLE_EXAMPLES,
   ];
 
   lines.push(
@@ -170,7 +188,7 @@ export function buildRegenerateTitlePrompt(
     'Latest assistant response:',
     assistantSnippet,
     '',
-    'Topic:',
+    'Title:',
   );
 
   return lines.join('\n');
@@ -178,6 +196,13 @@ export function buildRegenerateTitlePrompt(
 
 /** Max word count for a valid title. Anything above this is likely preamble leakage. */
 const MAX_TITLE_WORDS = 10;
+
+/**
+ * Titles that describe a missing task instead of naming one ("Unclear Topic",
+ * "Ambiguous request: ..."). Treated like no title so the next message can name the chat.
+ */
+const NON_TITLE_PATTERN =
+  /^(?:untitled|new chat|(?:ambiguous|unclear|vague|unknown|unspecified|undefined|no)(?:\s+\S+)?\s+(?:request|topic|task|question|inquiry|query|message|context)s?)\b/i;
 
 /**
  * Validate and clean a generated title.
@@ -223,6 +248,9 @@ export function validateTitle(title: string | null | undefined): string | null {
 
   // Reject empty, too long, or too many words (likely preamble leakage)
   if (cleaned.length === 0 || cleaned.length >= 100) return null;
+  // The model found no task to name, or named the missing task itself
+  if (cleaned.replace(/[.!]+$/, '').toUpperCase() === NO_TITLE_SENTINEL) return null;
+  if (NON_TITLE_PATTERN.test(cleaned)) return null;
   if (cleaned.split(/\s+/).length > MAX_TITLE_WORDS) return null;
 
   return cleaned;

@@ -73,3 +73,7 @@ credentials.enc
 # act (local GitHub Actions runner)
 .secrets
 .actrc
+
+# Isolated fork packaging output
+apps/electron/release-veto/
+apps/electron/resources/veto/*.iconset/

@@ -151,6 +151,12 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'goals', {
+    get: () => getSessionScopedToolCallbacks(sessionId)?.goals,
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'pages', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.pages;

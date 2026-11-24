@@ -215,6 +215,16 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  RPC_CHANNELS.sessionPins.GET,
+  RPC_CHANNELS.sessionPins.UPDATE,
+  RPC_CHANNELS.sessionPins.CHANGED,
+  // goals — authoritative workspace-owned native storage and human controls
+  RPC_CHANNELS.goals.GET,
+  RPC_CHANNELS.goals.GET_ONE,
+  RPC_CHANNELS.goals.CREATE,
+  RPC_CHANNELS.goals.ACTION,
+  RPC_CHANNELS.goals.CHANGED,
+
   // server — server-level operations (no workspace context needed)
   RPC_CHANNELS.server.GET_WORKSPACES,
   RPC_CHANNELS.server.CREATE_WORKSPACE,
@@ -442,6 +452,13 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.projects.CHANGED,
 
   // pages — workspace pages (mini dashboards)
+  // Native documents live with their workspace on the owning host.
+  RPC_CHANNELS.documents.GET,
+  RPC_CHANNELS.documents.GET_ONE,
+  RPC_CHANNELS.documents.CREATE,
+  RPC_CHANNELS.documents.UPDATE,
+  RPC_CHANNELS.documents.DELETE,
+  RPC_CHANNELS.documents.CHANGED,
   RPC_CHANNELS.pages.GET,
   RPC_CHANNELS.pages.GET_ONE,
   RPC_CHANNELS.pages.CREATE,
@@ -476,6 +493,10 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.git.GET_BRANCH,
   RPC_CHANNELS.git.LIST_REPOS,
   RPC_CHANNELS.git.CREATE_WORKTREE,
+
+  // reviews — read using credentials on the workspace server
+  RPC_CHANNELS.reviews.LIST,
+  RPC_CHANNELS.reviews.GET,
 
   // prWatch — the PR watcher runs where the session's repo, source credentials and `gh` live
   RPC_CHANNELS.prWatch.SUBSCRIBE,

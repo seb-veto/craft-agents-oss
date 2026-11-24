@@ -13,7 +13,7 @@
 
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { SessionToolContext } from './context.ts';
+import type { GoalToolRole, SessionToolContext } from './context.ts';
 import type { ToolResult } from './types.ts';
 
 // Handlers
@@ -65,6 +65,10 @@ import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel } from './handlers/messaging.ts';
 import { handleDecide } from './handlers/decide.ts';
+import {
+  GoalGetSchema, GoalProgressSchema, GoalAskSchema, GoalEvidenceSchema, GoalRequestVerificationSchema, GoalVerdictSchema,
+  handleGoalGet, handleGoalProgress, handleGoalAsk, handleGoalEvidence, handleGoalRequestVerification, handleGoalVerdict,
+} from './handlers/goals.ts';
 
 // ============================================================
 // Canonical Zod Schemas
@@ -236,7 +240,7 @@ export const SpawnSessionSchema = z.object({
   llmConnection: z.string().optional().describe('Connection slug (e.g., "anthropic-api", "codex")'),
   model: z.string().optional().describe('Model ID override'),
   enabledSourceSlugs: z.array(z.string()).optional().describe('Source slugs to enable in the new session'),
-  permissionMode: z.enum(['safe', 'ask', 'guarded', 'allow-all']).optional().describe('Permission mode for the new session. Never looser than the spawning session\'s current mode (safe < ask < guarded < allow-all); a looser value is lowered to it.'),
+  permissionMode: z.enum(['safe', 'ask', 'guarded', 'allow-all']).optional().describe('Permission mode for the new session. Never looser than the spawning session\'s current mode (safe < ask < guarded < allow-all); a looser request is lowered to it. A workspace may require a startup mode instead; if that mode is looser than the parent’s, the spawn is refused.'),
   thinkingLevel: z.enum(['off', 'low', 'medium', 'high', 'xhigh', 'max']).optional()
     .describe('Reasoning level for the new session. Silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash). Omit to inherit the workspace default.'),
   labels: z.array(z.string()).optional().describe('Labels for the new session'),
@@ -674,6 +678,13 @@ Provide title + description (the description becomes the task goal and the initi
 
 Returns { slug, orchestratorSessionId, taskLabelId, warnings } — unknown source/skill slugs are reported as warnings, not errors. Use it when the user asks to capture or queue work as a task; to execute work right now, use the current session or spawn_session instead.`,
 
+  goal_get: 'Read the assigned Goal, its current revision, done criteria, and evidence references. Read this before making a Goal update.',
+  goal_progress: 'Append a progress update to your assigned Goal as its owner. This does not certify any done criteria.',
+  goal_ask: 'Ask the human one blocking question for your assigned Goal. The goal will wait for their answer; stop autonomous work after asking.',
+  goal_evidence: 'Write a new immutable text evidence file for your assigned Goal. Return its evidence/ path for a criterion verdict.',
+  goal_request_verification: 'Request a new independent verifier for your assigned Goal after owner work is ready. This does not mark the goal done.',
+  goal_verdict: 'Record an independent verdict only for your assigned verification session. Inspect the actual output, then submit a pass or fail and persisted evidence for every stable criterion.',
+
   list_pages: `List the workspace's Pages — persistent, agent-authored HTML mini dashboards/documents rendered in the app's Pages section (sidebar) and optionally shared via password-protected public links.
 
 Returns compact summaries: slug, name, kind (static/interactive/live), project, refresh schedule, last refresh outcome, share state, and folder path. Optionally filter by projectId. Use get_page for full details on one page.`,
@@ -776,6 +787,8 @@ interface SessionToolDefBase {
   safeMode: SessionToolSafeMode;
   /** Whether this tool only reads data (no side effects). Enables parallel execution in backends that support it. */
   readOnly?: boolean;
+  /** Hidden unless the trusted host supplies one of these assigned Goal roles. */
+  goalRoles?: readonly GoalToolRole[];
 }
 
 /** Tool executed from the canonical registry (requires a concrete handler). */
@@ -831,6 +844,14 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'archive_session', description: TOOL_DESCRIPTIONS.archive_session, inputSchema: ArchiveSessionSchema, executionMode: 'registry', safeMode: 'block', handler: handleArchiveSession },
   { name: 'create_task', description: TOOL_DESCRIPTIONS.create_task, inputSchema: CreateTaskSchema, executionMode: 'registry', safeMode: 'block', handler: handleCreateTask },
   { name: 'project_memory_append', description: TOOL_DESCRIPTIONS.project_memory_append, inputSchema: ProjectMemoryAppendSchema, executionMode: 'registry', safeMode: 'block', handler: handleProjectMemoryAppend },
+  // Goals tools require actor-bound callbacks and are hidden outside their assigned role.
+  { name: 'goal_get', description: TOOL_DESCRIPTIONS.goal_get, inputSchema: GoalGetSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, goalRoles: ['owner', 'verifier'], handler: handleGoalGet },
+  { name: 'goal_progress', description: TOOL_DESCRIPTIONS.goal_progress, inputSchema: GoalProgressSchema, executionMode: 'registry', safeMode: 'block', goalRoles: ['owner'], handler: handleGoalProgress },
+  { name: 'goal_ask', description: TOOL_DESCRIPTIONS.goal_ask, inputSchema: GoalAskSchema, executionMode: 'registry', safeMode: 'block', goalRoles: ['owner'], handler: handleGoalAsk },
+  { name: 'goal_evidence', description: TOOL_DESCRIPTIONS.goal_evidence, inputSchema: GoalEvidenceSchema, executionMode: 'registry', safeMode: 'block', goalRoles: ['owner', 'verifier'], handler: handleGoalEvidence },
+  { name: 'goal_request_verification', description: TOOL_DESCRIPTIONS.goal_request_verification, inputSchema: GoalRequestVerificationSchema, executionMode: 'registry', safeMode: 'block', goalRoles: ['owner'], handler: handleGoalRequestVerification },
+  { name: 'goal_verdict', description: TOOL_DESCRIPTIONS.goal_verdict, inputSchema: GoalVerdictSchema, executionMode: 'registry', safeMode: 'block', goalRoles: ['verifier'], handler: handleGoalVerdict },
+
   // Pages tools (registry — use the grouped ctx.pages callbacks from SessionManager)
   { name: 'list_pages', description: TOOL_DESCRIPTIONS.list_pages, inputSchema: ListPagesSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListPages },
   { name: 'get_page', description: TOOL_DESCRIPTIONS.get_page, inputSchema: GetPageSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleGetPage },
@@ -886,6 +907,13 @@ export const CODING_PROFILE_TOOLS: Readonly<Record<string, 'always' | 'sources' 
   pr_bind: 'always',
   pr_unbind: 'always',
   pr_set_auto_merge: 'always',
+  // Goals also work in Coding mode; the independent assigned-role filter still applies.
+  goal_get: 'always',
+  goal_progress: 'always',
+  goal_ask: 'always',
+  goal_evidence: 'always',
+  goal_request_verification: 'always',
+  goal_verdict: 'always',
   // The built-in browser (still behind its setting) checks the web UI being built; Pages hold the
   // reports and dashboards a coding session produces.
   browser_tool: 'always',
@@ -933,6 +961,8 @@ export interface SessionToolFilterOptions {
   hasEnabledSources?: boolean;
   /** Coding profile: the session is bound to a project (keeps the `project` tools). */
   hasProject?: boolean;
+  /** Expose only the tools for an assigned Goal role, resolved by the trusted host. */
+  goalRole?: GoalToolRole;
 }
 
 /** Whether a coding-profile session keeps the tool `name` (see {@link CODING_PROFILE_TOOLS}). */
@@ -958,6 +988,9 @@ export function getSessionToolDefs(options?: SessionToolFilterOptions): SessionT
   const coding = options?.profile === 'coding';
 
   return SESSION_TOOL_DEFS.filter(def => {
+    if (def.goalRoles && (!options?.goalRole || !def.goalRoles.includes(options.goalRole))) {
+      return false;
+    }
     if (!includeDeveloperFeedback && def.name === 'send_developer_feedback') {
       return false;
     }
@@ -1091,7 +1124,8 @@ export function getToolDefsAsJsonSchema(opts?: SessionToolNameOptions): JsonSche
     const jsonSchema = zodToJsonSchema(def.inputSchema as any, { $refStrategy: 'none' }) as Record<string, unknown>;
     // Strip metadata not needed by MCP/Pi consumers
     delete jsonSchema.$schema;
-    delete jsonSchema.additionalProperties;
+    // Goals reject additional fields even in the provider-facing schema.
+    if (!def.goalRoles) delete jsonSchema.additionalProperties;
     return {
       name: prefix + def.name,
       description: def.description,

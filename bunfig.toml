@@ -8,3 +8,7 @@ preload = ["./packages/shared/src/unified-network-interceptor.ts"]
 # `bun install --linker=hoisted` for the same reason.
 [install]
 linker = "hoisted"
+
+# Never collect tests from packaged app bundles (their app/ folder contains a copy of src/).
+[test]
+pathIgnorePatterns = ["apps/electron/release/**", "apps/electron/release-veto/**"]

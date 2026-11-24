@@ -27,6 +27,8 @@ import { sessionMetaMapAtom, type SessionMeta } from '@/atoms/sessions'
 import { StoplightProvider } from '@/context/StoplightContext'
 import {
   useNavigationState,
+  useNavigation,
+  routes,
   isSessionsNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
@@ -34,6 +36,8 @@ import {
   isAutomationsNavigation,
   isProjectsNavigation,
   isPagesNavigation,
+  isGoalsNavigation,
+  isDocumentsNavigation,
 } from '@/contexts/NavigationContext'
 import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelectionCount } from '@/hooks/useSession'
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
@@ -46,6 +50,10 @@ import { AutomationInfoPage } from '../automations/AutomationInfoPage'
 import ProjectInfoPage from '@/pages/ProjectInfoPage'
 import { KanbanBoardContainer } from './kanban/KanbanBoardContainer'
 import { PagesHome } from '../pages/PagesHome'
+import { DocumentsHome } from '../documents/DocumentsHome'
+import { InboxHome } from '../inbox/InboxHome'
+import { ReviewsHome } from '../reviews/ReviewsHome'
+import { GoalsHome } from '../goals/GoalsHome'
 import { PageView } from '../pages/PageView'
 import type { ExecutionEntry } from '../automations/types'
 import { automationsAtom } from '@/atoms/automations'
@@ -61,7 +69,7 @@ export interface MainContentPanelProps {
    * When provided, this panel renders based on the override instead of the global NavigationState.
    * Used by PanelSlot to render panels in the panel stack.
    */
-  navStateOverride?: import('../../../shared/types').NavigationState | null
+  navStateOverride?: import('../../../shared/navigation-types').NavigationState | null
 }
 
 export function MainContentPanel({
@@ -70,14 +78,19 @@ export function MainContentPanel({
   navStateOverride,
 }: MainContentPanelProps) {
   const { t } = useTranslation()
+  const { navigate } = useNavigation()
   const globalNavState = useNavigationState()
   const navState = navStateOverride ?? globalNavState
   const {
     activeWorkspaceId,
+    inbox,
+    onReviewCountChange,
     workspaces,
     onSessionStatusChange,
     onArchiveSession,
     onSessionLabelsChange,
+    projectMenuOptions,
+    onSetSessionProjects,
     sessionStatuses,
     labels,
     onTestAutomation,
@@ -195,6 +208,14 @@ export function MainContentPanel({
       onSessionStatusChange(sessionId, status)
     })
   }, [selectedIds, onSessionStatusChange])
+
+  const firstProjectId = selectedMetas[0]?.projectId ?? null
+  const activeProjectId = selectedMetas.length === selectedIds.size &&
+    selectedMetas.every(meta => (meta.projectId ?? null) === firstProjectId) ? firstProjectId : undefined
+
+  const handleBatchSetProject = useCallback((projectId: string | null) => {
+    onSetSessionProjects?.([...selectedIds], projectId)
+  }, [selectedIds, onSetSessionProjects])
 
   const handleBatchArchive = useCallback(() => {
     selectedIds.forEach(sessionId => {
@@ -357,6 +378,42 @@ export function MainContentPanel({
     )
   }
 
+  if (navState.navigator === 'reviews') {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        {activeWorkspaceId && <ReviewsHome key={activeWorkspaceId} workspaceId={activeWorkspaceId}
+          selectedKey={navState.details?.reviewId} onCount={onReviewCountChange} onSelect={id => navigate(routes.view.reviews(id))} />}
+      </Panel>
+    )
+  }
+
+  if (navState.navigator === 'inbox' && inbox) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <InboxHome key={activeWorkspaceId || ''} inbox={inbox} selectedId={navState.details?.sessionId}
+          onSelect={id => navigate(routes.view.inbox(id))} onOpenSession={id => navigate(routes.view.allSessions(id))}
+          renderSession={id => <ChatPage key={id} sessionId={id} trackViewing={false} />} />
+      </Panel>
+    )
+  }
+
+  if (isDocumentsNavigation(navState)) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <DocumentsHome key={activeWorkspaceId || ''} workspaceId={activeWorkspaceId || ''} documentId={navState.details?.documentId}
+          onOpenDocument={id => navigate(routes.view.documents(id))} onBack={() => navigate(routes.view.documents())} />
+      </Panel>
+    )
+  }
+
+  if (isGoalsNavigation(navState)) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <GoalsHome key={activeWorkspaceId || ''} workspaceId={activeWorkspaceId || ''} goalId={navState.details?.goalId} />
+      </Panel>
+    )
+  }
+
   // Pages navigator - full-width library grid, or one page's embedded render
   if (isPagesNavigation(navState)) {
     return wrapWithStoplight(
@@ -410,6 +467,9 @@ export function MainContentPanel({
             labels={labels}
             appliedLabelIds={appliedLabelIds}
             onToggleLabel={handleBatchToggleLabel}
+            projects={projectMenuOptions}
+            activeProjectId={activeProjectId}
+            onSetProject={onSetSessionProjects ? handleBatchSetProject : undefined}
             onArchive={handleBatchArchive}
             onClearSelection={clearMultiSelect}
           />

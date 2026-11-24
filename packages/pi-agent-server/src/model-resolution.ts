@@ -1,4 +1,5 @@
 import type { ModelRegistry as PiModelRegistry } from '@earendil-works/pi-coding-agent';
+import { CODEX_SOL_62_ID, CODEX_SOL_COMPAT_BASE_ID, makeCodexSol62Fallback } from '../../shared/src/config/pi-codex-sol-compat.ts';
 
 // Re-export from shared so the auth-aware mini-model denylist has a single
 // source of truth (also used by `getMiniModel()` at selection time).
@@ -13,8 +14,9 @@ type PiModel<T = any> = ReturnType<PiModelRegistry['find']>;
  * Resolution order:
  * 1. If `preferCustomEndpoint` is true, try `'custom-endpoint'` provider first
  * 2. Exact provider+model lookup via `piAuthProvider`
- * 3. Full `getAll()` scan by id/name
- * 4. Common provider fallback list (includes 'custom-endpoint')
+ * 3. Codex-only compatibility for GPT-6.2 Sol when missing from the pinned SDK
+ * 4. Full `getAll()` scan by id/name
+ * 5. Common provider fallback list (includes 'custom-endpoint')
  */
 export function resolvePiModel(
   modelRegistry: PiModelRegistry,
@@ -45,6 +47,11 @@ export function resolvePiModel(
       }
       return exact;
     }
+  }
+
+  if (piAuthProvider === 'openai-codex' && bareId === CODEX_SOL_62_ID) {
+    const base = modelRegistry.find(piAuthProvider, CODEX_SOL_COMPAT_BASE_ID);
+    if (base) return makeCodexSol62Fallback(base);
   }
 
   // Fallback: search all available models.

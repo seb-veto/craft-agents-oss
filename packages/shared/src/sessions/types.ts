@@ -62,6 +62,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'triggeredBy',
   // Project binding (workspace-scoped grouping)
   'projectId',
+  'projectRoutingDisabled',
+  'projectOverride',
   // Kanban: task/subtask hierarchy + board column
   'parentSessionId',
   'kanbanColumn',
@@ -236,6 +238,10 @@ export interface SessionConfig {
   };
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
+  /** Manual project choices, including No project, disable automatic routing. */
+  projectRoutingDisabled?: boolean;
+  /** This child explicitly uses a different project (or no project) instead of following its parent. */
+  projectOverride?: true;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */
   parentSessionId?: string;
   /** Kanban board column id ('todo' | 'in-progress' | 'done'). Drag-to-move target; independent of sessionStatus. */
@@ -359,6 +365,10 @@ export interface SessionHeader {
   };
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
+  /** Manual project choices, including No project, disable automatic routing. */
+  projectRoutingDisabled?: boolean;
+  /** This child explicitly uses a different project (or no project) instead of following its parent. */
+  projectOverride?: true;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */
   parentSessionId?: string;
   /** Kanban board column id ('todo' | 'in-progress' | 'done'). Drag-to-move target; independent of sessionStatus. */
@@ -463,6 +473,10 @@ export interface SessionMetadata {
   branchFromMessageId?: string;
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
+  /** Manual project choices, including No project, disable automatic routing. */
+  projectRoutingDisabled?: boolean;
+  /** This child explicitly uses a different project (or no project) instead of following its parent. */
+  projectOverride?: true;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */
   parentSessionId?: string;
   /** Kanban board column id ('todo' | 'in-progress' | 'done'). Drag-to-move target; independent of sessionStatus. */

@@ -45,3 +45,5 @@ export {
 } from './storage.ts';
 
 export type { UploadProjectAssetInput } from './storage.ts';
+
+export { chooseProjectForMessage } from './auto-route.ts';

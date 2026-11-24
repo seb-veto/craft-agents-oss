@@ -17,6 +17,7 @@
  * 6. Ask-mode prompt decision: Determine if user approval is needed
  */
 
+import { goalToolDenial } from '../goal-tool-policy.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -744,6 +745,9 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // ============================================================
   // 1. PERMISSION MODE CHECK
   // ============================================================
+  const goalDenial = goalToolDenial(sessionId, toolName, input);
+  if (goalDenial) return { type: 'block', reason: goalDenial };
+
   const modeResult = shouldAllowToolInMode(
     toolName,
     input,

@@ -6,6 +6,10 @@ import type { SessionOptions } from "@/hooks/useSessionOptions"
 import type { ContentSearchResult } from "@/hooks/useSessionSearch"
 
 export interface SessionListContextValue {
+  pinnedIds?: string[]
+  onPin?: (sessionId: string) => void
+  onUnpin?: (sessionId: string) => void
+  onMovePin?: (sessionId: string, beforeId?: string) => void
   // Session action callbacks (shared across all items)
   onRenameClick: (sessionId: string, currentName: string) => void
   onSessionStatusChange: (sessionId: string, state: SessionStatusId) => void

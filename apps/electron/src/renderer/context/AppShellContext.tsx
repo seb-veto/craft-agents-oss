@@ -46,6 +46,8 @@ export interface AppShellContextType {
   workspaceDefaultLlmConnection?: string
   /** Refresh LLM connections from config */
   refreshLlmConnections: () => Promise<void>
+  onReviewCountChange?: (count: number) => void
+  inbox?: import('@/components/inbox/useWorkspaceInbox').WorkspaceInbox
   pendingPermissions: Map<string, PermissionRequest[]>
   pendingCredentials: Map<string, CredentialRequest[]>
   /** Get draft input text for a session - reads from ref without triggering re-renders */
@@ -66,6 +68,9 @@ export interface AppShellContextType {
   labels?: import('@craft-agent/shared/labels').LabelConfig[]
   /** Callback when session labels change */
   onSessionLabelsChange?: (sessionId: string, labels: string[]) => void
+  /** Projects and batched assignment for the session multi-select panel. */
+  projectMenuOptions?: import('@/components/app-shell/ProjectMenuItems').SessionMenuProjectOption[]
+  onSetSessionProjects?: (sessionIds: string[], projectId: string | null) => void
   /**
    * Open All Sessions scoped to a task: replaces the view's label filter (and project
    * filter when given) with the task's scope — the same user-clearable header-chip

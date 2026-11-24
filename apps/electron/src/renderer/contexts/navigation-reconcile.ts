@@ -1,6 +1,6 @@
 import { buildRouteFromNavigationState, parseRouteToNavigationState } from '../../shared/route-parser'
 import type { ViewRoute } from '../../shared/routes'
-import type { NavigationState } from '../../shared/types'
+import type { NavigationState } from '../../shared/navigation-types'
 
 export type AutoSelectionResolver = (state: NavigationState) => NavigationState
 

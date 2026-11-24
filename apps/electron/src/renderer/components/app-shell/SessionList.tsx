@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef, type DragEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "react-i18next"
 import { useSetAtom } from "jotai"
@@ -7,6 +7,7 @@ import { getDateLocale } from "@craft-agent/shared/i18n"
 import { useAction } from "@/actions"
 import { Inbox, Archive } from "lucide-react"
 
+import { getPriorityGroupKey, SESSION_PRIORITIES } from "@/utils/session-priority"
 import { getSessionStatus } from "@/utils/session"
 import * as storage from "@/lib/local-storage"
 import { KEYS } from "@/lib/local-storage"
@@ -21,7 +22,7 @@ import { SessionSearchHeader } from "./SessionSearchHeader"
 import { SessionItem } from "./SessionItem"
 import { SessionListProvider, type SessionListContextValue } from "@/context/SessionListContext"
 import { useSessionSelection, useSessionSelectionStore } from "@/hooks/useSession"
-import { useSessionSearch, type FilterMode } from "@/hooks/useSessionSearch"
+import { useSessionSearch, type FilterMode, type SessionGroupingMode } from "@/hooks/useSessionSearch"
 import { useSessionActions } from "@/hooks/useSessionActions"
 import { useEntityListInteractions } from "@/hooks/useEntityListInteractions"
 import { useFocusZone } from "@/hooks/keyboard"
@@ -34,12 +35,16 @@ import type { SessionStatusId, SessionStatus } from "@/config/session-status-con
 import { buildCollapsedGroupsScopeSuffix } from "@/utils/session-list-collapse"
 import { ancestorIds, flatRow, type SessionListRow } from "@/utils/session-tree"
 import { FlipOnChange, SPRING } from "@craft-agent/ui/motion"
+import { useSessionPins } from "@/hooks/useSessionPins"
 import { useListReorderFlip } from "@/hooks/useListReorderFlip"
+import { loadManualSessionOrder, moveSessionFamily, saveManualSessionOrder, type SessionPlacement } from "@/utils/session-manual-order"
 
 export type { SessionListRow }
 
 /** Grouping mode for chat list */
-export type ChatGroupingMode = 'date' | 'status' | 'unread' | 'project'
+export type ChatGroupingMode = SessionGroupingMode
+
+const MANUAL_DRAG_TYPE = "application/x-craft-session-order"
 
 interface SessionListProps {
   items: SessionMeta[]
@@ -53,6 +58,8 @@ interface SessionListProps {
   onRename: (sessionId: string, name: string) => void
   /** Called when Enter is pressed to focus chat input for a specific session */
   onFocusChatInput?: (sessionId?: string) => void
+  /** Request composer focus after explicitly opening a row, not while browsing with arrows. */
+  onFocusSelectedSession?: (sessionId: string) => void
   /** Called when a session is selected */
   onSessionSelect?: (session: SessionMeta) => void
   /** Called when user wants to open a session in a new window */
@@ -81,7 +88,7 @@ interface SessionListProps {
   projects?: Array<{ id: string; slug: string; name: string; color?: string }>
   /** Callback to bind/unbind a session to a project (null = unbind) */
   onSetProjectId?: (sessionId: string, projectId: string | null) => void
-  /** How to group sessions: 'date' (default) or 'status' */
+  /** How to group sessions, or Manual order without activity-based groups. */
   groupingMode?: ChatGroupingMode
   /** Workspace ID for content search (optional - if not provided, content search is disabled) */
   workspaceId?: string
@@ -137,6 +144,7 @@ export function SessionList({
   onSessionStatusChange,
   onRename,
   onFocusChatInput,
+  onFocusSelectedSession,
   onOpenInNewWindow,
   sessionOptions,
   searchActive,
@@ -160,6 +168,11 @@ export function SessionList({
 }: SessionListProps) {
   const { t, i18n } = useTranslation()
   const setSendToWorkspace = useSetAtom(sendToWorkspaceAtom)
+  const { pinnedIds, update: updatePin } = useSessionPins(workspaceId)
+  const itemsWithPins = useMemo(() => {
+    const order = new Map(pinnedIds.map((id, index) => [id, index]))
+    return items.map(item => ({ ...item, pinOrder: order.get(item.id) }))
+  }, [items, pinnedIds])
 
   // --- Selection (atom-backed, shared with ChatDisplay + BatchActionPanel) ---
   const {
@@ -262,6 +275,15 @@ export function SessionList({
     storage.set(KEYS.collapsedSessionFamilies, saved, familyState.scope)
   }, [familyState])
 
+  // Manual order is a local view preference, independent of the session metadata.
+  const [manualState, setManualState] = useState(() => ({
+    scope: collapseScopeSuffix,
+    ids: groupingMode === 'manual' ? loadManualSessionOrder(collapseScopeSuffix) : [],
+  }))
+  if (manualState.scope !== collapseScopeSuffix) {
+    setManualState({ scope: collapseScopeSuffix, ids: groupingMode === 'manual' ? loadManualSessionOrder(collapseScopeSuffix) : [] })
+  }
+
   // --- Data pipeline (search, filtering, pagination, grouping) ---
   const scrollViewportRef = useRef<HTMLDivElement>(null)
 
@@ -280,7 +302,7 @@ export function SessionList({
     collapsedGroupsMeta,
     searchInputRef,
   } = useSessionSearch({
-    items,
+    items: itemsWithPins,
     searchActive: searchActive ?? false,
     searchQuery,
     workspaceId,
@@ -292,6 +314,7 @@ export function SessionList({
     collapsedGroups,
     collapsedFamilies,
     groupingMode,
+    manualOrder: manualState.ids,
     scrollViewportRef,
   })
 
@@ -319,7 +342,47 @@ export function SessionList({
     // can insert header-only placeholder groups in the correct position.
     // Every row is grouped and sorted by its family's view (`groupItem`), which
     // all rows of a family share, so the stable sorts keep a family together.
-    const rows = visibleRows
+    const pinnedRows = visibleRows.filter(row => row.groupItem.pinOrder !== undefined)
+    pinnedRows.sort((a, b) => a.groupItem.pinOrder! - b.groupItem.pinOrder!)
+    const collapsedPins = collapsedGroupsMeta.find(meta => meta.key === 'pinned')
+    const pinGroups: EntityListGroup<SessionListRow>[] = pinnedRows.length || collapsedPins
+      ? [{ key: 'pinned', label: t('session.priority.pinned'), items: pinnedRows, collapsible: true,
+          ...(collapsedPins ? { collapsedCount: collapsedPins.count } : {}) }]
+      : []
+    const withPins = (groups: EntityListGroup<SessionListRow>[]) => {
+      const all = [...pinGroups, ...groups]
+      for (const group of all) {
+        if (group.items.length || group.collapsedCount) group.collapsible = all.length > 1
+      }
+      return { rows: all.flatMap(group => group.items), groups: all }
+    }
+    const rows = visibleRows.filter(row => row.groupItem.pinOrder === undefined)
+    const unpinnedCollapsedGroups = collapsedGroupsMeta.filter(meta => meta.key !== 'pinned')
+
+    if (groupingMode === 'priority') {
+      const definitions = [
+        ...SESSION_PRIORITIES.map(priority => ({
+          key: `priority-${priority.key}`, label: t(`session.priority.${priority.key}`),
+        })),
+      ]
+      const orderedGroups: EntityListGroup<SessionListRow>[] = definitions.flatMap(({ key, label }) => {
+        const groupRows = rows.filter(row => getPriorityGroupKey(row.groupItem) === key)
+        const collapsedMeta = unpinnedCollapsedGroups.find(meta => meta.key === key)
+        if (!groupRows.length && !collapsedMeta) return []
+        // Stable sorting preserves each family's nesting and child order.
+        groupRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
+        return [{ key, label, items: groupRows, collapsible: true,
+          ...(collapsedMeta ? { collapsedCount: collapsedMeta.count } : {}) }]
+      })
+      if (orderedGroups.length === 1) orderedGroups[0].collapsible = false
+      return withPins(orderedGroups)
+    }
+
+    if (groupingMode === 'manual') {
+      const collapsed = unpinnedCollapsedGroups.find(meta => meta.key === 'manual')
+      return withPins(rows.length || collapsed ? [{ key: 'manual', label: t('sidebar.groupByManual'), items: rows,
+        ...(collapsed ? { collapsedCount: collapsed.count } : {}) }] : [])
+    }
 
     if (groupingMode === 'unread') {
       // Two fixed buckets: unread on top, read below. Within each, items keep
@@ -336,8 +399,8 @@ export function SessionList({
       unreadRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
       readRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
 
-      const collapsedUnread = collapsedGroupsMeta.find(m => m.key === 'unread-yes')
-      const collapsedRead = collapsedGroupsMeta.find(m => m.key === 'unread-no')
+      const collapsedUnread = unpinnedCollapsedGroups.find(m => m.key === 'unread-yes')
+      const collapsedRead = unpinnedCollapsedGroups.find(m => m.key === 'unread-no')
 
       // Unread counts the unread sessions, Read every session in its group: a family with an unread
       // session sits in Unread with its read ones. Both count the whole list, so neither the loaded page
@@ -345,6 +408,7 @@ export function SessionList({
       let unreadCount = 0
       let readCount = 0
       for (const { members, view } of families) {
+        if (view.pinOrder !== undefined) continue
         if (view.hasUnread) unreadCount += members.filter(member => member.item.hasUnread).length
         else readCount += members.length
       }
@@ -367,10 +431,7 @@ export function SessionList({
         },
       ]
 
-      return {
-        rows: orderedGroups.flatMap(g => g.items),
-        groups: orderedGroups,
-      }
+      return withPins(orderedGroups)
     }
 
     if (groupingMode === 'status') {
@@ -387,7 +448,7 @@ export function SessionList({
       }
 
       // Insert collapsed placeholder groups
-      for (const meta of collapsedGroupsMeta) {
+      for (const meta of unpinnedCollapsedGroups) {
         if (!groupsByKey.has(meta.key)) {
           const statusId = meta.key.replace('status-', '')
           groupsByKey.set(meta.key, { rows: [], statusId })
@@ -399,7 +460,7 @@ export function SessionList({
         const state = sessionStatuses.find(s => s.id === statusId)
         if (!state) continue
         groupRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
-        const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
+        const collapsedMeta = unpinnedCollapsedGroups.find(m => m.key === key)
         orderedGroups.push({
           key,
           label: t(`status.${state.id}`, state.label),
@@ -419,10 +480,7 @@ export function SessionList({
         orderedGroups[0].collapsible = false
       }
 
-      return {
-        rows: orderedGroups.flatMap(g => g.items),
-        groups: orderedGroups,
-      }
+      return withPins(orderedGroups)
     }
 
     if (groupingMode === 'project') {
@@ -444,7 +502,7 @@ export function SessionList({
       }
 
       // Insert collapsed placeholder groups (header-only, items: [])
-      for (const meta of collapsedGroupsMeta) {
+      for (const meta of unpinnedCollapsedGroups) {
         if (!groupsByKey.has(meta.key)) {
           const idPart = meta.key.replace('project-', '')
           const projectId = idPart === '__none__' ? null : idPart
@@ -455,7 +513,7 @@ export function SessionList({
       const orderedGroups: EntityListGroup<SessionListRow>[] = []
       for (const [key, { rows: groupRows, projectId }] of groupsByKey) {
         groupRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
-        const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
+        const collapsedMeta = unpinnedCollapsedGroups.find(m => m.key === key)
         const label = projectId
           ? (projectNameById.get(projectId) ?? t('sidebar.unknownProject', { defaultValue: 'Unknown project' }))
           : t('sidebar.noProject', { defaultValue: 'No project' })
@@ -480,10 +538,7 @@ export function SessionList({
         orderedGroups[0].collapsible = false
       }
 
-      return {
-        rows: orderedGroups.flatMap(g => g.items),
-        groups: orderedGroups,
-      }
+      return withPins(orderedGroups)
     }
 
     // Default: group by date
@@ -507,7 +562,7 @@ export function SessionList({
     }
 
     // Insert collapsed placeholder groups (header-only, items: [])
-    for (const meta of collapsedGroupsMeta) {
+    for (const meta of unpinnedCollapsedGroups) {
       if (!groupsByKey.has(meta.key)) {
         const date = new Date(meta.key)
         groupsByKey.set(meta.key, {
@@ -533,35 +588,41 @@ export function SessionList({
       orderedGroups[0].collapsible = false
     }
 
-    return {
-      rows,
-      groups: orderedGroups,
-    }
+    return withPins(orderedGroups)
   }, [isSearchMode, matchingFilterItems, otherResultItems, visibleRows, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, families, t, i18n.resolvedLanguage])
 
   const flatRows = rowData.rows
+  const canReorder = groupingMode === 'manual' && !isSearchMode
+  const rootIds = useMemo(() => canReorder ? families.filter(family => family.view.pinOrder === undefined).map(family => family.view.id) : [], [canReorder, families])
+  const rootIndices = useMemo(() => new Map(rootIds.map((id, index) => [id, index])), [rootIds])
+  const moveRoot = (source: string, target: string, placement: SessionPlacement) => {
+    const next = moveSessionFamily(manualState.ids, rootIds, source, target, placement)
+    if (!next) return
+    saveManualSessionOrder(manualState.scope, next)
+    setManualState({ scope: manualState.scope, ids: next })
+  }
+
+  const draggedRoot = useRef<{ id: string; scope: string } | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; placement: SessionPlacement; rowId: string } | null>(null)
+  const clearDrag = () => {
+    draggedRoot.current = null
+    setDropTarget(null)
+  }
+  const getDropTarget = (event: DragEvent<HTMLDivElement>, row: SessionListRow, index: number) => {
+    if (draggedRoot.current?.scope !== manualState.scope || draggedRoot.current.id === row.groupItem.id) return
+    if (!event.dataTransfer.types.includes(MANUAL_DRAG_TYPE)) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const placement: SessionPlacement = row.depth > 0 || event.clientY >= (bounds.top + bounds.bottom) / 2 ? 'after' : 'before'
+    let edge = index
+    if (placement === 'after') {
+      while (flatRows[edge + 1]?.groupItem.id === row.groupItem.id) edge++
+    }
+    return { id: row.groupItem.id, placement, rowId: flatRows[edge].item.id }
+  }
 
   const collapseAllGroups = useCallback(() => {
-    if (groupingMode === 'status') {
-      const allKeys = new Set(items.map(item => `status-${getSessionStatus(item)}`))
-      setCollapsedGroups(allKeys)
-    } else if (groupingMode === 'unread') {
-      const allKeys = new Set(items.map(item => item.hasUnread ? 'unread-yes' : 'unread-no'))
-      setCollapsedGroups(allKeys)
-    } else if (groupingMode === 'project') {
-      const knownProjectIds = new Set((projects ?? []).map(p => p.id))
-      const allKeys = new Set(items.map(item => {
-        const pid = (item as { projectId?: string }).projectId
-        return pid && knownProjectIds.has(pid) ? `project-${pid}` : 'project-__none__'
-      }))
-      setCollapsedGroups(allKeys)
-    } else {
-      const allKeys = new Set(items.map(item =>
-        startOfDay(new Date(item.lastMessageAt || 0)).toISOString()
-      ))
-      setCollapsedGroups(allKeys)
-    }
-  }, [items, groupingMode, projects])
+    setCollapsedGroups(new Set(rowData.groups.map(group => group.key)))
+  }, [rowData.groups])
   const expandAllGroups = useCallback(() => {
     setCollapsedGroups(new Set())
   }, [])
@@ -599,12 +660,10 @@ export function SessionList({
         navigateToSession(row.item.id)
       }, [navigateToSession]),
       onActivate: useCallback((row: SessionListRow) => {
-        // Only navigate when not in multi-select (matches original behavior)
-        if (!MultiSelect.isMultiSelectActive(selectionStore.state)) {
-          navigateToSession(row.item.id)
-        }
-        onFocusChatInput?.(row.item.id)
-      }, [selectionStore.state, navigateToSession, onFocusChatInput]),
+        if (MultiSelect.isMultiSelectActive(selectionStore.state)) return
+        navigateToSession(row.item.id)
+        onFocusSelectedSession?.(row.item.id)
+      }, [selectionStore.state, navigateToSession, onFocusSelectedSession]),
       enabled: isKeyboardEligible,
       virtualFocus: searchActive ?? false,
     },
@@ -700,7 +759,8 @@ export function SessionList({
   const handleSelectSession = useCallback((row: SessionListRow, index: number) => {
     selectSession(row.item.id, index)
     navigateToSession(row.item.id)
-  }, [selectSession, navigateToSession])
+    onFocusSelectedSession?.(row.item.id)
+  }, [selectSession, navigateToSession, onFocusSelectedSession])
 
   const handleSelectSessionById = useCallback((sessionId: string) => {
     const index = rowIndexMap.get(sessionId) ?? -1
@@ -777,6 +837,10 @@ export function SessionList({
   const resolvedSearchQuery = isSearchMode ? highlightQuery : searchQuery
 
   const listContext = useMemo((): SessionListContextValue => ({
+    pinnedIds,
+    onPin: (id: string) => { void updatePin({ type: 'pin', sessionId: id }) },
+    onUnpin: (id: string) => { void updatePin({ type: 'unpin', sessionId: id }) },
+    onMovePin: (id: string, beforeId?: string) => { void updatePin({ type: 'move', sessionId: id, beforeId }) },
     onRenameClick: handleRenameClick,
     onSessionStatusChange,
     onFlag: onFlag ? handleFlagWithToast : undefined,
@@ -804,7 +868,7 @@ export function SessionList({
     activeChatMatchInfo,
     hasPendingPrompt,
   }), [
-    handleRenameClick, onSessionStatusChange,
+    pinnedIds, updatePin, handleRenameClick, onSessionStatusChange,
     onFlag, handleFlagWithToast, onUnflag, handleUnflagWithToast,
     onArchive, handleArchiveWithToast, onUnarchive, handleUnarchiveWithToast,
     onMarkUnread, handleDeleteWithToast, onLabelsChange,
@@ -874,7 +938,10 @@ export function SessionList({
         renderItem={(row, _indexInGroup, isFirstInGroup) => {
           const flatIndex = rowIndexMap.get(row.item.id) ?? 0
           const rowProps = interactions.getRowProps(row, flatIndex)
-          return (
+          const rootIndex = row.depth === 0 ? rootIndices.get(row.item.id) : undefined
+          const previous = rootIndex !== undefined ? rootIds[rootIndex - 1] : undefined
+          const next = rootIndex !== undefined ? rootIds[rootIndex + 1] : undefined
+          const item = (
             <SessionItem
               item={row.item}
               index={flatIndex}
@@ -888,10 +955,66 @@ export function SessionList({
               depth={row.depth}
               guides={row.guides}
               inheritedLabels={row.parent?.labels}
+              onMoveUp={previous ? () => moveRoot(row.item.id, previous, 'before') : undefined}
+              onMoveDown={next && rowIndexMap.has(next) ? () => moveRoot(row.item.id, next, 'after') : undefined}
+              onReorderDragStart={rootIndex !== undefined && rootIds.length > 1 ? event => {
+                draggedRoot.current = { id: row.item.id, scope: manualState.scope }
+                event.dataTransfer.setData(MANUAL_DRAG_TYPE, row.item.id)
+                event.dataTransfer.effectAllowed = 'move'
+              } : undefined}
+              onReorderDragEnd={clearDrag}
               subSessions={row.descendantCount > 0
                 ? { count: row.descendantCount, collapsed: row.collapsed, onToggle: () => toggleFamily(row) }
                 : undefined}
             />
+          )
+          if (row.groupItem.pinOrder !== undefined) {
+            if (row.depth !== 0) return item
+            return (
+            <div
+              data-pin-session={row.item.id}
+              onDragOver={event => {
+                if (event.dataTransfer.types.includes('application/x-craft-pin')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }
+              }}
+              onDrop={event => {
+                const source = event.dataTransfer.getData('application/x-craft-pin')
+                if (!pinnedIds.includes(source)) return
+                event.preventDefault()
+                void updatePin({ type: 'move', sessionId: source, beforeId: row.item.id })
+              }}
+            >{item}</div>
+            )
+          }
+          if (!canReorder) return item
+          const indicator = draggedRoot.current?.scope === manualState.scope && dropTarget?.rowId === row.item.id
+            ? dropTarget.placement : undefined
+          return (
+            <div
+              className="relative"
+              onDragOver={event => {
+                const target = getDropTarget(event, row, flatIndex)
+                if (!target) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                setDropTarget(current => current?.id === target.id && current.placement === target.placement && current.rowId === target.rowId
+                  ? current : target)
+              }}
+              onDragLeave={event => {
+                if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+                setDropTarget(current => current?.id === row.groupItem.id ? null : current)
+              }}
+              onDrop={event => {
+                const target = getDropTarget(event, row, flatIndex)
+                const source = event.dataTransfer.getData(MANUAL_DRAG_TYPE)
+                if (!target || !source || source !== draggedRoot.current?.id) return
+                event.preventDefault()
+                moveRoot(source, target.id, target.placement)
+                clearDrag()
+              }}
+            >
+              {item}
+              {indicator && <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 z-10 h-0.5 bg-accent-solid ${indicator === 'before' ? 'top-0' : 'bottom-0'}`} />}
+            </div>
           )
         }}
         header={

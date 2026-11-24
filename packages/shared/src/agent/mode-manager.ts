@@ -2095,6 +2095,8 @@ export function shouldAllowToolInMode(
         // Classification, not visibility: `decide` is read-only and Explore-safe
         // whenever the backend advertised it.
         includeDecide: true,
+        // Classify the shared Goal read; adapter checks the actual assignment.
+        goalRole: 'owner',
       });
 
       if (safeAllowedSessionTools.has(toolName)) {

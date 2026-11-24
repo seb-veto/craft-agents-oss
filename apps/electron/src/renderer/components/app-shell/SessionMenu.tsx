@@ -17,6 +17,8 @@ import { useTranslation } from "react-i18next"
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
   Trash2,
   Pencil,
   Flag,
@@ -32,6 +34,8 @@ import {
   Send,
   FolderKanban,
   Check,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getStateColor, getStateIcon, type SessionStatusId } from '@/config/session-status-config'
@@ -43,13 +47,12 @@ import type { SessionMeta } from '@/atoms/sessions'
 import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/session'
 import { MessagingSessionMenuItem } from '@/components/messaging/MessagingSessionMenuItem'
 import { SendCraftyHereMenuItem } from '@/components/crafty/SendCraftyHereMenuItem'
+import { findLabelById } from '@craft-agent/shared/labels'
+import { getSessionPriority, SESSION_PRIORITIES, withSessionPriority } from '@/utils/session-priority'
 import { useSessionMenuActions } from '@/hooks/useSessionMenuActions'
 
-export interface SessionMenuProjectOption {
-  id: string
-  slug: string
-  name: string
-}
+import { ProjectMenuItems, type SessionMenuProjectOption } from './ProjectMenuItems'
+export type { SessionMenuProjectOption } from './ProjectMenuItems'
 
 export interface SessionMenuProps {
   /** Session data — display state is derived from this */
@@ -66,7 +69,11 @@ export interface SessionMenuProps {
   projects?: SessionMenuProjectOption[]
   /** Callback for binding/unbinding the session to a project. `null` = unbind. */
   onSetProjectId?: (projectId: string | null) => void
+  /** True chat pins; independent of Flag and workflow status. */
+  pinControls?: { pinned: boolean; onPin: () => void; onUnpin: () => void; onMoveUp?: () => void; onMoveDown?: () => void }
   /** Callbacks */
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onRename: () => void
   onFlag: () => void
   onUnflag: () => void
@@ -88,6 +95,8 @@ export function SessionMenu({
   sessionStatuses,
   labels = [],
   onLabelsChange,
+  onMoveUp,
+  onMoveDown,
   onRename,
   onFlag,
   onUnflag,
@@ -101,6 +110,7 @@ export function SessionMenu({
   hasTransferTargets,
   projects = [],
   onSetProjectId,
+  pinControls,
 }: SessionMenuProps) {
   const { t } = useTranslation()
 
@@ -119,6 +129,19 @@ export function SessionMenu({
 
   return (
     <>
+      {(onMoveUp || onMoveDown) && (
+        <>
+          <MenuItem onClick={onMoveUp} disabled={!onMoveUp}>
+            <ArrowUp className="size-3.5" />
+            <span className="flex-1">{t('sessionMenu.moveUp')}</span>
+          </MenuItem>
+          <MenuItem onClick={onMoveDown} disabled={!onMoveDown}>
+            <ArrowDown className="size-3.5" />
+            <span className="flex-1">{t('sessionMenu.moveDown')}</span>
+          </MenuItem>
+          <Separator />
+        </>
+      )}
       {/* Share/Shared based on shared state */}
       {!sharedUrl ? (
         <MenuItem onClick={actions.share}>
@@ -182,6 +205,23 @@ export function SessionMenu({
         </SubContent>
       </Sub>
 
+      {onLabelsChange && findLabelById(labels, 'priority')?.valueType === 'number' && (
+        <Sub>
+          <SubTrigger className="pr-2">
+            <Flag className="h-3.5 w-3.5" />
+            <span className="flex-1">{t('sidebar.groupByPriority')}</span>
+          </SubTrigger>
+          <SubContent>
+            {SESSION_PRIORITIES.map(priority => (
+              <MenuItem key={priority.key} onClick={() => onLabelsChange(withSessionPriority(item.labels, priority.value))}>
+                <span className="flex-1">{t(`session.priority.${priority.key}`)}</span>
+                {getSessionPriority(item).value === priority.value && <Check className="h-3.5 w-3.5" />}
+              </MenuItem>
+            ))}
+          </SubContent>
+        </Sub>
+      )}
+
       {/* Labels submenu - hierarchical label tree with nested sub-menus and toggle checkmarks */}
       {labels.length > 0 && (
         <Sub>
@@ -213,24 +253,25 @@ export function SessionMenu({
             <span className="flex-1">{t("sessionMenu.projects")}</span>
           </SubTrigger>
           <SubContent>
-            <MenuItem onClick={() => onSetProjectId(null)}>
-              {!item.projectId && <Check className="h-3.5 w-3.5" />}
-              <span className={item.projectId ? 'flex-1 ml-[18px]' : 'flex-1'}>
-                {t("sessionMenu.noProject")}
-              </span>
-            </MenuItem>
-            <Separator />
-            {projects.map((p) => {
-              const isBound = item.projectId === p.id
-              return (
-                <MenuItem key={p.id} onClick={() => onSetProjectId(p.id)}>
-                  {isBound && <Check className="h-3.5 w-3.5" />}
-                  <span className={isBound ? 'flex-1' : 'flex-1 ml-[18px]'}>{p.name}</span>
-                </MenuItem>
-              )
-            })}
+            <ProjectMenuItems
+              projects={projects}
+              activeProjectId={item.projectId ?? null}
+              onSelect={onSetProjectId}
+              menu={{ MenuItem, Separator }}
+            />
           </SubContent>
         </Sub>
+      )}
+
+      {pinControls && (
+        <>
+          <MenuItem onClick={pinControls.pinned ? pinControls.onUnpin : pinControls.onPin}>
+            {pinControls.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            <span className="flex-1">{t(pinControls.pinned ? 'session.pin.unpin' : 'session.pin.pin')}</span>
+          </MenuItem>
+          {pinControls.pinned && pinControls.onMoveUp && <MenuItem onClick={pinControls.onMoveUp}><ArrowUp className="h-3.5 w-3.5" /><span>{t('session.pin.moveUp')}</span></MenuItem>}
+          {pinControls.pinned && pinControls.onMoveDown && <MenuItem onClick={pinControls.onMoveDown}><ArrowDown className="h-3.5 w-3.5" /><span>{t('session.pin.moveDown')}</span></MenuItem>}
+        </>
       )}
 
       {/* Flag/Unflag */}

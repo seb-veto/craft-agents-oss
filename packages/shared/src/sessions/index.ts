@@ -131,3 +131,7 @@ export {
 } from './bundle.ts';
 
 
+
+// Ordered workspace chat pins (independent of flags)
+export { loadSessionPins, updateSessionPins, applySessionPinAction } from './pins.ts';
+export type { SessionPinAction } from './pins.ts';

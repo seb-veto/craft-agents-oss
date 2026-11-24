@@ -26,6 +26,8 @@ export interface SessionMeta {
   lastMessageAt?: number
   isProcessing?: boolean
   isFlagged?: boolean
+  /** Renderer-only ordinal from the workspace pin list; never persisted in session JSONL. */
+  pinOrder?: number
   lastReadMessageId?: string
   workingDirectory?: string
   enabledSourceSlugs?: string[]

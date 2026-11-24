@@ -65,6 +65,7 @@ import {
   setLastPlanFilePath,
   getSessionScopedToolCallbacks,
 } from './session-scoped-tools.ts';
+import { goalToolDenial } from './goal-tool-policy.ts';
 import { attachSessionSelfManagementBindings } from './session-self-management-bindings.ts';
 
 // Session tool proxy definitions (for registering with subprocess)
@@ -637,7 +638,7 @@ export class PiAgent extends BaseAgent {
       profile: this._agentProfile,
       hasEnabledSources: this.sourceManager.getIntendedSlugs().size > 0,
       hasProject: !!this.config.session?.projectId,
-    });
+    }, this._sessionId);
 
     // Patch call_llm description with provider-specific model hint
     if (this.config.miniModel) {
@@ -1595,6 +1596,8 @@ export class PiAgent extends BaseAgent {
     args: Record<string, unknown>,
   ): Promise<{ content: string; isError: boolean }> {
     try {
+      const denial = goalToolDenial(this._sessionId, toolName);
+      if (denial) return { content: `[ERROR] ${denial}`, isError: true };
       // call_llm uses the shared pre-execution pipeline from BaseAgent
       if (toolName === 'call_llm') {
         try {

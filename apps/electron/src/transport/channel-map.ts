@@ -355,6 +355,9 @@ export const CHANNEL_MAP = {
   createCodingWorktree: invoke(RPC_CHANNELS.git.CREATE_WORKTREE),
 
   // PR watcher (Coding mode chat-header chip)
+  listReviews: invoke(RPC_CHANNELS.reviews.LIST),
+  getReview: invoke(RPC_CHANNELS.reviews.GET),
+
   prWatchSubscribe: invoke(RPC_CHANNELS.prWatch.SUBSCRIBE),
   prWatchUnsubscribe: invoke(RPC_CHANNELS.prWatch.UNSUBSCRIBE),
   prWatchRefresh: invoke(RPC_CHANNELS.prWatch.REFRESH),
@@ -410,6 +413,11 @@ export const CHANNEL_MAP = {
   setDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_DEFAULT),
   setWorkspaceDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT),
 
+  // Ordered chat pins
+  getPinnedSessions: invoke(RPC_CHANNELS.sessionPins.GET),
+  updatePinnedSessions: invoke(RPC_CHANNELS.sessionPins.UPDATE),
+  onPinnedSessionsChanged: listener(RPC_CHANNELS.sessionPins.CHANGED),
+
   // Projects
   getProjects: invoke(RPC_CHANNELS.projects.GET),
   getProject: invoke(RPC_CHANNELS.projects.GET_ONE),
@@ -420,6 +428,21 @@ export const CHANNEL_MAP = {
   uploadProjectAsset: invoke(RPC_CHANNELS.projects.UPLOAD_ASSET),
   deleteProjectAsset: invoke(RPC_CHANNELS.projects.DELETE_ASSET),
   onProjectsChanged: listener(RPC_CHANNELS.projects.CHANGED),
+
+  // Native Goals
+  getGoals: invoke(RPC_CHANNELS.goals.GET),
+  getGoal: invoke(RPC_CHANNELS.goals.GET_ONE),
+  createGoal: invoke(RPC_CHANNELS.goals.CREATE),
+  goalAction: invoke(RPC_CHANNELS.goals.ACTION),
+  onGoalsChanged: listener(RPC_CHANNELS.goals.CHANGED),
+
+  // Native Documents
+  getDocuments: invoke(RPC_CHANNELS.documents.GET),
+  getDocument: invoke(RPC_CHANNELS.documents.GET_ONE),
+  createDocument: invoke(RPC_CHANNELS.documents.CREATE),
+  updateDocument: invoke(RPC_CHANNELS.documents.UPDATE),
+  deleteDocument: invoke(RPC_CHANNELS.documents.DELETE),
+  onDocumentsChanged: listener(RPC_CHANNELS.documents.CHANGED),
 
   // Pages
   getPages: invoke(RPC_CHANNELS.pages.GET),
